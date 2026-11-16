@@ -1,0 +1,10 @@
+[Unit]
+Description=Run My DAG hourly
+
+[Timer]
+OnCalendar=hourly
+Persistent=true
+Unit=mydag.service
+
+[Install]
+WantedBy=timers.target

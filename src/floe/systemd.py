@@ -1,0 +1,48 @@
+"""Thin wrapper over systemctl. The only place floe talks to the service manager.
+
+Uses subprocess so it stays stdlib-only and easy to debug: every call is the
+exact command you'd type.
+"""
+
+from __future__ import annotations
+
+import subprocess
+
+
+class SystemdError(RuntimeError):
+    def __init__(self, args: list[str], returncode: int, stderr: str):
+        self.returncode = returncode
+        self.stderr = stderr
+        super().__init__(f"{' '.join(args)} failed ({returncode}): {stderr.strip()}")
+
+
+class Systemd:
+    def __init__(self, user: bool = True):
+        self.base = ["systemctl", "--user"] if user else ["systemctl"]
+
+    def _run(self, *args: str) -> str:
+        cmd = [*self.base, *args]
+        r = subprocess.run(cmd, capture_output=True, text=True)
+        if r.returncode:
+            raise SystemdError(cmd, r.returncode, r.stderr)
+        return r.stdout
+
+    def daemon_reload(self) -> None:
+        self._run("daemon-reload")
+
+    def enable(self, unit: str, now: bool = False) -> None:
+        self._run("enable", *(["--now"] if now else []), unit)
+
+    def disable(self, unit: str, now: bool = False) -> None:
+        self._run("disable", *(["--now"] if now else []), unit)
+
+    def start(self, unit: str, wait: bool = True) -> None:
+        """For Type=oneshot, waits until the service has finished unless wait=False."""
+        self._run("start", *([] if wait else ["--no-block"]), unit)
+
+    def stop(self, unit: str) -> None:
+        self._run("stop", unit)
+
+    def show(self, unit: str, *props: str) -> dict[str, str]:
+        out = self._run("show", unit, f"--property={','.join(props)}")
+        return dict(line.split("=", 1) for line in out.splitlines() if "=" in line)
