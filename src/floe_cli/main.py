@@ -60,12 +60,13 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="floe", description="Run and schedule local Python workflows.")
     sub = parser.add_subparsers(dest="cmd", required=True, metavar="COMMAND")
 
+    definition = "workflow definition file, or the name of an installed workflow"
     p = sub.add_parser("run", help="run a workflow now in this process, printing JSON events")
-    p.add_argument("path", type=Path, help="workflow definition file")
+    p.add_argument("target", help=definition)
     p.set_defaults(handler=_run)
 
     p = sub.add_parser("install", help="write unit files, reload systemd, enable the timer")
-    p.add_argument("path", type=Path, help="workflow definition file")
+    p.add_argument("target", help=f"{definition} (to reinstall)")
     p.add_argument("--adopt", action="store_true", help="take over existing unit files not written by floe")
     p.add_argument("--dry-run", action="store_true", help="show what would change and do nothing")
     p.set_defaults(handler=_install)
@@ -79,6 +80,12 @@ def _parser() -> argparse.ArgumentParser:
         p = sub.add_parser(name, help=text)
         p.add_argument("target", help=target)
         p.set_defaults(handler=handler)
+
+    p = sub.add_parser("list", help="list installed workflows with schedule and last run")
+    p.add_argument("--check", action="store_true",
+                   help="also load each definition and report units that are out of date (runs workflow code)")
+    p.add_argument("--json", action="store_true", help="print workflows as JSON")
+    p.set_defaults(handler=_list)
 
     p = sub.add_parser("runs", help="list recorded runs under systemd, newest first")
     p.add_argument("target", help=target)
@@ -102,17 +109,31 @@ def _positive(value: str) -> int:
     return number
 
 
+def _is_path(target: str) -> bool:
+    """Targets ending in .py or containing a slash are files; others are names."""
+    return target.endswith(".py") or "/" in target
+
+
 def _workflow_name(target: str) -> str:
-    """A path to a definition file, or a workflow name (e.g. after deleting the file)."""
-    path = Path(target)
-    if path.suffix == ".py" or path.is_file():
-        return floe.load(path).name
+    """A workflow name, from a definition file or given directly (e.g. after deleting the file)."""
+    if _is_path(target):
+        return floe.load(target).name
     floe.unit_names(target)  # validates the name
     return target
 
 
+def _definition(target: str, ctx) -> Path:
+    """A definition file, given directly or recorded for an installed workflow."""
+    if _is_path(target):
+        return Path(target)
+    installed = floe.find_installed(ctx.store, target)
+    if installed.script is None:
+        raise floe.NotFoundError(f"no definition file recorded for {target!r}; pass its path")
+    return installed.script
+
+
 def _run(args, ctx) -> int:
-    workflow = floe.load(args.path)
+    workflow = floe.load(_definition(args.target, ctx))
 
     def emit(event: floe.Event) -> None:
         print(json.dumps(event.to_dict()), flush=True)
@@ -121,7 +142,7 @@ def _run(args, ctx) -> int:
 
 
 def _install(args, ctx) -> int:
-    dep = floe.Deployment.for_workflow(floe.load(args.path))
+    dep = floe.Deployment.for_workflow(floe.load(_definition(args.target, ctx)))
     plan = floe.plan_install(dep, ctx.store, adopt=args.adopt)
     if args.dry_run:
         for change in plan.changes:
@@ -156,6 +177,39 @@ def _status(args, ctx) -> int:
         for key, value in unit.properties.items():
             print(f"  {key}={value}")
     return 0
+
+
+def _list(args, ctx) -> int:
+    summaries = floe.overview(ctx.store, ctx.sd, ctx.journal, verify=args.check)
+    if args.json:
+        print(json.dumps([summary.to_dict() for summary in summaries], indent=2))
+    elif not summaries:
+        print("no workflows installed")
+    else:
+        rows = [("NAME", "SCHEDULE", "TIMER", "NEXT", "LAST RUN", "SCRIPT")]
+        for summary in summaries:
+            last = summary.last_run
+            rows.append((
+                summary.name,
+                ", ".join(summary.schedule) or "-",
+                "active" if summary.active else "inactive",
+                _local(summary.next_run),
+                "-" if last is None else f"{_local(last.started)} {last.status}",
+                _home(summary.workflow.script),
+            ))
+        widths = [max(len(row[i]) for row in rows) for i in range(len(rows[0]) - 1)]
+        for row, summary in zip(rows, [None, *summaries]):
+            print(("  ".join(cell.ljust(width) for cell, width in zip(row, widths)) + "  " + row[-1]).rstrip())
+            for problem in summary.problems if summary else ():
+                print(f"  ! {problem}")
+    return 1 if args.check and any(summary.problems for summary in summaries) else 0
+
+
+def _home(path: Path | None) -> str:
+    if path is None:
+        return "?"
+    home = Path.home()
+    return f"~/{path.relative_to(home)}" if path.is_relative_to(home) else str(path)
 
 
 def _runs(args, ctx) -> int:

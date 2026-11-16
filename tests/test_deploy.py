@@ -165,6 +165,7 @@ def test_uninstall(dep, tmp_path, sd):
     assert [c for c in sd.mock_calls if c[0] != "show"] == [
         call.disable("mydag.timer", now=True),
         call.stop("mydag.service", missing_ok=True),
+        call.clean_state("mydag.timer"),
         call.daemon_reload(),
     ]
     assert list(store.path.iterdir()) == []

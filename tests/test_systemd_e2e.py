@@ -5,6 +5,7 @@ to uninstall the units afterward. Normal pytest runs skip this module's test.
 """
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -24,14 +25,25 @@ def test_clean_redeploy_run_and_journal():
     store = floe.UnitStore(floe.user_unit_dir())
     sd = floe.Systemd()
 
-    def command(name, *args):
+    def floe_command(*args):
         # The real `floe` command from this environment, as a user would run it.
         result = subprocess.run(
-            [str(Path(sys.executable).parent / "floe"), name, str(script), *args],
+            [str(Path(sys.executable).parent / "floe"), *args],
             capture_output=True, text=True, timeout=60,
         )
         assert result.returncode == 0, result.stdout + result.stderr
         return result.stdout
+
+    def command(name, *args):
+        return floe_command(name, str(script), *args)
+
+    def latest_run_id():
+        subprocess.run(["journalctl", "--user", "--sync"], check=True, capture_output=True, timeout=30)
+        runs = json.loads(floe_command("runs", workflow.name, "--json", "-n", "1"))
+        return runs[0]["run_id"] if runs else None
+
+    data_home = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local" / "share")
+    stamp = data_home / "systemd" / "timers" / f"stamp-{dep.timer_name}"
 
     # Refuse foreign/masked units before taking any action. These units are
     # disposable test infrastructure; do not back them up or restore them.
@@ -53,12 +65,20 @@ def test_clean_redeploy_run_and_journal():
             for suffix in ("wants", "requires", "upholds"):
                 for directory in store.path.glob(f"*.{suffix}"):
                     assert not (directory / name).is_symlink()
+        # A leftover stamp would make the next install "catch up" with a run at once.
+        assert not stamp.exists(), f"test left {stamp}"
+        assert workflow.name not in [w["name"] for w in json.loads(floe_command("list", "--json"))]
 
     try:
         command("uninstall")
         assert_clean()
 
+        before = latest_run_id()
         command("install")
+        assert latest_run_id() == before, "install triggered a run"
+        [listed] = [w for w in json.loads(floe_command("list", "--json", "--check")) if w["name"] == workflow.name]
+        assert (listed["script"], listed["problems"], listed["enabled"]) == (str(script), [], True)
+        assert listed["next_run"]
         for name, text in expected.items():
             assert (store.path / name).read_text() == text
         timer = sd.show(dep.timer_name, "ActiveState", "UnitFileState")

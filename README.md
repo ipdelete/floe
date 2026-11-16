@@ -93,8 +93,34 @@ floe status mydag                    # systemd's view of service and timer
 floe uninstall mydag                 # disable, stop, delete the unit files
 ```
 
-`start`, `status` and `uninstall` accept either the workflow file or the
-workflow name, so a workflow can be uninstalled after its file is deleted.
+Every command accepts the workflow file or, once installed, the workflow name.
+Targets ending in `.py` or containing `/` are files; anything else is a name.
+`floe run mydag` and `floe install mydag` use the file recorded at install
+time; `uninstall` by name works even after the file is deleted.
+
+## List installed workflows
+
+```bash
+floe list            # name, schedule, timer state, next and last run, file
+floe list --check    # also report units that no longer match their file
+floe list --json
+```
+
+```
+NAME   SCHEDULE        TIMER   NEXT                 LAST RUN                       SCRIPT
+mydag  *-*-* *:00:00   active  2026-11-16 14:00:00  2026-11-16 13:53:07 succeeded  ~/src/floe/workflow.py
+etl    *-*-* 00:00:00  active  2026-11-17 00:00:00  2026-11-16 00:00:01 failed     ~/etl/flow.py
+  ! script not found: /home/me/etl/flow.py
+```
+
+There is no registry: the units' `[X-Floe]` section records the workflow
+name, its definition file, and the Floe source directory the service uses.
+`floe list` reports, without running workflow code, a missing unit of the pair,
+a missing definition file, units that point at Floe in another location, and
+units installed by an older Floe version. `--check` also loads each definition
+(running its top-level code) to find units that are out of date, for example
+after editing `SCHEDULE` without reinstalling, and then exits nonzero if any
+workflow has a problem. The schedule is shown as systemd normalizes it.
 
 `install` writes `<config>/systemd/user/<WORKFLOW>.service` and `.timer`,
 where `<config>` is `$XDG_CONFIG_HOME` when set to an absolute path, otherwise
@@ -110,8 +136,10 @@ require rerunning `install`.
 `uninstall` is best-effort: it attempts every step (disable and stop, remove
 files and enable links, `daemon-reload`), then checks that systemd no longer
 has the units loaded from Floe's files and that the service is not still
-running, resetting a failed state so systemd forgets the unit. Any failures are
-reported together with a nonzero exit code. Rerunning
+running, resetting a failed state so systemd forgets the unit. It also removes
+the timer's last-trigger stamp; otherwise a later install would immediately
+"catch up" with a run (`Persistent=true`). Any failures are reported together
+with a nonzero exit code. Rerunning
 it continues an interrupted uninstall, including units whose files are gone but
 are still loaded. Same-named units loaded from other directories are not touched.
 
@@ -145,7 +173,8 @@ wake a sleeping laptop. User services normally depend on your user session;
 execution while logged out requires systemd user lingering to be enabled.
 
 Changes to task code take effect on the next execution. Changes to `WORKFLOW`,
-`SCHEDULE` or the file's location need `install` again. Changing `WORKFLOW`
+`SCHEDULE` or the file's location need `install` again (`floe list --check`
+shows which workflows need it). Changing `WORKFLOW`
 creates new units: `floe uninstall <old-name>` first.
 
 ## Inspect execution history
@@ -199,6 +228,7 @@ src/floe/        library: all logic, no user I/O
   runner.py      run(workflow, on_event) -> bool
   deploy.py      Deployment, plan_install/apply/install, uninstall, start, status
   history.py     list_runs, get_run, run_logs -> Run, TaskRun, RunLogs, LogLine
+  inventory.py   list_installed, find_installed, check_installed, overview -> InstalledWorkflow, WorkflowSummary
   render.py      unit file text
   store.py       ownership-protected unit files
   systemd.py     thin systemctl wrapper

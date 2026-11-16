@@ -29,12 +29,14 @@ class UnitStore:
             raise ValueError(f"invalid unit filename: {name!r}")
         return self.path / name
 
-    def is_owned(self, name: str) -> bool:
+    def metadata(self, name: str) -> dict[str, str]:
+        """The [X-Floe] keys of a unit file (last value wins); empty if the file
+        is missing, not a regular file, or has no such section. Reads only Floe's
+        own section, never systemd directive semantics."""
         file = self._file(name)
         if file.is_symlink() or not file.is_file():
-            return False
-        # Inspect only our marker, not arbitrary systemd directive semantics.
-        section = owner = None
+            return {}
+        section, data = None, {}
         for line in file.read_text().splitlines():
             line = line.strip()
             if not line or line.startswith(("#", ";")):
@@ -43,9 +45,22 @@ class UnitStore:
                 section = line[1:-1]
             elif section == "X-Floe":
                 key, sep, value = line.partition("=")
-                if sep and key.strip() == "Owner":
-                    owner = value.strip()
-        return owner == "floe"
+                if sep:
+                    data[key.strip()] = value.strip()
+        return data
+
+    def is_owned(self, name: str) -> bool:
+        return self.metadata(name).get("Owner") == "floe"
+
+    def units(self) -> list[str]:
+        """Names of the service and timer files in this directory, sorted."""
+        if not self.path.is_dir():
+            return []
+        return sorted(
+            entry.name for entry in self.path.iterdir()
+            if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*\.(service|timer)", entry.name)
+            and entry.is_file() and not entry.is_symlink()
+        )
 
     def preflight(self, name: str, *, adopt: bool = False) -> None:
         file = self._file(name)

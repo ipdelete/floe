@@ -217,6 +217,62 @@ def test_runs_rejects_bad_limit(capsys):
     assert "must be at least 1" in capsys.readouterr().err
 
 
+def list_sd(sd):
+    sd.show_all.return_value = [
+        ("UnitFileState", "enabled"), ("ActiveState", "active"),
+        ("TimersCalendar", "{ OnCalendar=*-*-* *:00:00 ; next_elapse=@1794855600 }"),
+        ("NextElapseUSecRealtime", "@1794855600"), ("LastTriggerUSec", ""),
+    ]
+    sd.show.return_value = {"ActiveState": "inactive"}
+    return sd
+
+
+def test_list(flow, store, sd, capsys):
+    assert main(["list"], store=store, sd=list_sd(sd), journal=FakeJournal([])) == 0
+    assert capsys.readouterr().out == "no workflows installed\n"
+    main(["install", str(flow)], store=store, sd=sd)
+    capsys.readouterr()
+    journal = FakeJournal(Run("a" * 32).succeeded_run().records)
+    assert main(["list"], store=store, sd=sd, journal=journal) == 0
+    lines = capsys.readouterr().out.splitlines()
+    assert lines[0].split() == ["NAME", "SCHEDULE", "TIMER", "NEXT", "LAST", "RUN", "SCRIPT"]
+    assert lines[1].startswith("mydag  *-*-* *:00:00  active  ")
+    assert lines[1].endswith(f"succeeded  {flow}") and len(lines) == 2
+
+
+def test_list_problems_and_check_exit_code(flow, store, sd, capsys):
+    main(["install", str(flow)], store=store, sd=list_sd(sd))
+    flow.write_text(flow.read_text().replace('"hourly"', '"daily"'))
+    capsys.readouterr()
+    assert main(["list"], store=store, sd=sd, journal=FakeJournal([])) == 0
+    assert "  ! " not in capsys.readouterr().out
+    assert main(["list", "--check"], store=store, sd=sd, journal=FakeJournal([])) == 1
+    assert capsys.readouterr().out.splitlines()[2] == "  ! units out of date (mydag.timer); reinstall"
+    assert main(["list", "--json"], store=store, sd=sd, journal=FakeJournal([])) == 0
+    [data] = json.loads(capsys.readouterr().out)
+    assert data["name"] == "mydag" and data["script"] == str(flow) and data["enabled"] is True
+
+
+def test_run_and_reinstall_by_name(flow, store, sd, capsys):
+    main(["install", str(flow)], store=store, sd=sd)
+    flow.write_text(flow.read_text().replace('"hourly"', '"daily"'))
+    capsys.readouterr()
+    assert main(["run", "mydag"], store=store, sd=sd) == 0
+    assert json.loads(capsys.readouterr().out.splitlines()[-1])["status"] == "succeeded"
+    assert main(["install", "mydag"], store=store, sd=sd) == 0
+    assert capsys.readouterr().out.startswith("wrote: mydag.timer;")
+
+
+@pytest.mark.parametrize("args,message", [
+    (["run", "mydag"], "error: workflow 'mydag' is not installed"),
+    (["install", "mydag"], "error: workflow 'mydag' is not installed"),
+    (["run", "./missing"], "error: workflow file not found"),
+])
+def test_name_targets_must_be_installed(store, sd, capsys, args, message):
+    assert main(args, store=store, sd=sd) == 1
+    assert capsys.readouterr().err.startswith(message)
+
+
 def test_default_unit_dir_resolved_at_call_time(flow, tmp_path, sd, capsys, monkeypatch):
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "custom"))
     assert main(["install", "--dry-run", str(flow)], sd=sd) == 0

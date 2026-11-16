@@ -378,3 +378,49 @@ class RunLogs:
 
     def to_dict(self) -> dict:
         return {"run": self.run.to_dict(), "lines": [line.to_dict() for line in self.lines]}
+
+
+# --- Inventory --------------------------------------------------------------
+
+@dataclass(frozen=True)
+class InstalledWorkflow:
+    """A workflow installed by floe, as recorded in its unit files.
+
+    `problems` are found without running any workflow code: a missing unit of
+    the pair, a missing script, or units pointing at floe in another place.
+    """
+
+    name: str
+    script: Path | None
+    service: Path | None
+    timer: Path | None
+    problems: tuple[str, ...] = ()
+
+    def to_dict(self) -> dict:
+        return {"name": self.name, "script": None if self.script is None else str(self.script),
+                "service": None if self.service is None else str(self.service),
+                "timer": None if self.timer is None else str(self.timer), "problems": list(self.problems)}
+
+
+@dataclass(frozen=True)
+class WorkflowSummary:
+    """An installed workflow with its schedule, timer state, and last run."""
+
+    workflow: InstalledWorkflow
+    schedule: tuple[str, ...] = ()
+    enabled: bool = False
+    active: bool = False
+    next_run: datetime | None = None
+    last_trigger: datetime | None = None
+    last_run: Run | None = None
+    problems: tuple[str, ...] = ()
+
+    @property
+    def name(self) -> str:
+        return self.workflow.name
+
+    def to_dict(self) -> dict:
+        return {**self.workflow.to_dict(), "schedule": list(self.schedule), "enabled": self.enabled,
+                "active": self.active, "next_run": _iso(self.next_run), "last_trigger": _iso(self.last_trigger),
+                "last_run": None if self.last_run is None else self.last_run.to_dict(),
+                "problems": list(self.problems)}

@@ -41,10 +41,22 @@ class Systemd:
         """With missing_ok, a unit that is not loaded (exit 5) counts as stopped."""
         self._run("stop", unit, ok=(0, 5) if missing_ok else (0,))
 
+    def clean_state(self, unit: str) -> None:
+        """Remove a stopped unit's state, e.g. a Persistent= timer's last-trigger
+        stamp, which otherwise makes a reinstalled timer fire immediately."""
+        self._run("clean", "--what=state", unit)
+
     def reset_failed(self, unit: str) -> None:
         """Forget a unit's failed state, so systemd can unload a removed unit."""
         self._run("reset-failed", unit)
 
-    def show(self, unit: str, *props: str) -> dict[str, str]:
-        out = self._run("show", unit, f"--property={','.join(props)}")
-        return dict(line.split("=", 1) for line in out.splitlines() if "=" in line)
+    def show(self, unit: str, *props: str, unix_timestamps: bool = False) -> dict[str, str]:
+        """Properties as a dict; for a property listed more than once, the last value."""
+        return dict(self.show_all(unit, *props, unix_timestamps=unix_timestamps))
+
+    def show_all(self, unit: str, *props: str, unix_timestamps: bool = False) -> list[tuple[str, str]]:
+        """Properties in order, keeping repeats (e.g. one TimersCalendar per schedule).
+        With unix_timestamps, times are "@<seconds>" instead of locale text."""
+        out = self._run("show", unit, f"--property={','.join(props)}",
+                        *(["--timestamp=unix"] if unix_timestamps else []))
+        return [tuple(line.split("=", 1)) for line in out.splitlines() if "=" in line]

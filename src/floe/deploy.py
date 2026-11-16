@@ -98,7 +98,8 @@ class Deployment:
             return {
                 self.service_name: render_service(
                     self.workflow, script, self.python, self.timeout, self.pythonpath),
-                self.timer_name: render_timer(self.workflow, self.schedule, self.persistent),
+                self.timer_name: render_timer(
+                    self.workflow, self.schedule, self.persistent, script, self.pythonpath),
             }
         except ValueError as exc:
             raise ValidationError([str(exc)]) from exc
@@ -194,6 +195,10 @@ def uninstall(workflow: str, store: UnitStore, sd: Systemd) -> list[str]:
         attempt(sd.stop, timer, missing_ok=True)
     if service in ours:
         attempt(sd.stop, service, missing_ok=True)
+    if timer in ours:
+        # Forget when it last fired: otherwise a later install with
+        # Persistent=true runs the workflow at once to "catch up".
+        attempt(sd.clean_state, timer)
 
     # Remove files even if stopping failed: the timer can no longer start new
     # runs, and systemd keeps managing a running process until it exits.

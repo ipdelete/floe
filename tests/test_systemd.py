@@ -14,12 +14,25 @@ from floe.systemd import Systemd, SystemdError
     ("start", ("demo.service",), {"wait": False}, ["start", "--no-block", "demo.service"]),
     ("stop", ("demo.service",), {}, ["stop", "demo.service"]),
     ("reset_failed", ("demo.service",), {}, ["reset-failed", "demo.service"]),
+    ("clean_state", ("demo.timer",), {}, ["clean", "--what=state", "demo.timer"]),
 ])
 def test_systemctl_commands(monkeypatch, method, args, kwargs, command):
     run = Mock(return_value=subprocess.CompletedProcess([], 0, "", ""))
     monkeypatch.setattr("floe.systemd.subprocess.run", run)
     getattr(Systemd(), method)(*args, **kwargs)
     run.assert_called_once_with(["systemctl", "--user", *command], capture_output=True, text=True)
+
+
+def test_show_all_keeps_repeated_properties_and_unix_timestamps(monkeypatch):
+    out = "TimersCalendar={ OnCalendar=a ; next_elapse=@1 }\nTimersCalendar={ OnCalendar=b ; next_elapse=@2 }\n"
+    run = Mock(return_value=subprocess.CompletedProcess([], 0, out, ""))
+    monkeypatch.setattr("floe.systemd.subprocess.run", run)
+    assert [v for _, v in Systemd().show_all("demo.timer", "TimersCalendar", unix_timestamps=True)] == [
+        "{ OnCalendar=a ; next_elapse=@1 }", "{ OnCalendar=b ; next_elapse=@2 }"]
+    run.assert_called_once_with(
+        ["systemctl", "--user", "show", "demo.timer", "--property=TimersCalendar", "--timestamp=unix"],
+        capture_output=True, text=True,
+    )
 
 
 def test_show_parses_values_containing_equals(monkeypatch):

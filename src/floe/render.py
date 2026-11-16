@@ -50,6 +50,14 @@ def environment(name: str, value: str) -> str:
     return f'Environment="{name}={value.replace("%", "%%")}"'
 
 
+def metadata(workflow: str, script: Path, pythonpath: Path) -> str:
+    """Floe's own section. systemd ignores X- sections; floe reads it to find
+    and check installed workflows."""
+    check_value(str(script), "script")
+    check_value(str(pythonpath), "pythonpath")
+    return f"[X-Floe]\nOwner=floe\nWorkflow={workflow}\nScript={script}\nFloe={pythonpath}\n"
+
+
 def render_service(workflow: str, script: Path, python: str, timeout: str, pythonpath: Path) -> str:
     """The service runs `floe run <script>` with the given interpreter, finding
     floe through PYTHONPATH so no virtual environment is needed."""
@@ -69,11 +77,11 @@ def render_service(workflow: str, script: Path, python: str, timeout: str, pytho
         f"TimeoutStartSec={literal(timeout)}\n"
         "KillMode=control-group\nStandardOutput=journal\nStandardError=journal\n"
         f"SyslogIdentifier={workflow}\n\n"
-        f"[X-Floe]\nOwner=floe\nWorkflow={workflow}\n"
+        f"{metadata(workflow, script, pythonpath)}"
     )
 
 
-def render_timer(workflow: str, schedule: tuple[str, ...], persistent: bool) -> str:
+def render_timer(workflow: str, schedule: tuple[str, ...], persistent: bool, script: Path, pythonpath: Path) -> str:
     triggers = "".join(f"OnCalendar={value}\n" for value in schedule)
     return (
         "# Managed by floe. Manual edits will be overwritten.\n\n"
@@ -81,5 +89,5 @@ def render_timer(workflow: str, schedule: tuple[str, ...], persistent: bool) -> 
         f"[Timer]\n{triggers}Persistent={'yes' if persistent else 'no'}\n"
         f"Unit={workflow}.service\n\n"
         "[Install]\nWantedBy=timers.target\n\n"
-        f"[X-Floe]\nOwner=floe\nWorkflow={workflow}\n"
+        f"{metadata(workflow, script, pythonpath)}"
     )

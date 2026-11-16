@@ -17,12 +17,14 @@ from .deploy import (
     user_unit_dir,
 )
 from .history import get_run, list_runs, run_logs
+from .inventory import check_installed, find_installed, list_installed, overview
 from .journal import Journal
 from .loader import load
 from .model import (
     EVENT_SCHEMA,
     Event,
     FloeError,
+    InstalledWorkflow,
     InstallPlan,
     LoadError,
     LogLine,
@@ -37,15 +39,18 @@ from .model import (
     UnitState,
     ValidationError,
     Workflow,
+    WorkflowSummary,
 )
 from .runner import run
 from .store import UnitStore
 from .systemd import Systemd
 
 __all__ = [
-    "EVENT_SCHEMA", "Deployment", "Event", "FloeError", "InstallPlan", "Journal", "LoadError",
-    "LogLine", "NotFoundError", "NotOwnedError", "Run", "RunLogs", "Systemd", "SystemdError",
-    "TaskRun", "UninstallError", "UnitChange", "UnitState", "UnitStore", "ValidationError",
-    "Workflow", "apply", "get_run", "install", "list_runs", "load", "plan_install", "run",
-    "run_logs", "start", "status", "uninstall", "unit_names", "user_unit_dir",
+    "EVENT_SCHEMA", "Deployment", "Event", "FloeError", "InstallPlan", "InstalledWorkflow",
+    "Journal", "LoadError", "LogLine", "NotFoundError", "NotOwnedError", "Run", "RunLogs",
+    "Systemd", "SystemdError", "TaskRun", "UninstallError", "UnitChange", "UnitState",
+    "UnitStore", "ValidationError", "Workflow", "WorkflowSummary", "apply", "check_installed",
+    "find_installed", "get_run", "install", "list_installed", "list_runs", "load", "overview",
+    "plan_install", "run", "run_logs", "start", "status", "uninstall", "unit_names",
+    "user_unit_dir",
 ]
