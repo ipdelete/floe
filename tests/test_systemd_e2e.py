@@ -1,7 +1,7 @@
 """Opt-in test of the actual workflow and user systemd session.
 
-This removes and reinstalls the workflow's units, executes its tasks, and
-leaves its timer enabled. Normal pytest runs skip this module's test.
+This deploys disposable workflow units, executes the tasks, and always attempts
+to uninstall the units afterward. Normal pytest runs skip this module's test.
 """
 
 import json
@@ -20,7 +20,7 @@ pytestmark = pytest.mark.systemd_e2e
 ROOT = Path(__file__).parents[1]
 
 
-def test_clean_redeploy_run_and_journal(tmp_path):
+def test_clean_redeploy_run_and_journal():
     script = ROOT / "workflow.py"
     config = runpy.run_path(str(script))
     dep = Deployment(config["WORKFLOW"], script, config["SCHEDULE"])
@@ -35,8 +35,8 @@ def test_clean_redeploy_run_and_journal(tmp_path):
         assert result.returncode == 0, result.stdout + result.stderr
         return result.stdout
 
-    # Refuse foreign/masked units before taking any action. Keep a backup for
-    # diagnosis; never use --adopt to commandeer an unrelated installation.
+    # Refuse foreign/masked units before taking any action. These units are
+    # disposable test infrastructure; do not back them up or restore them.
     expected = dep.render_units()
     exec_start = next(line for line in expected[dep.service_name].splitlines() if line.startswith("ExecStart="))
     for name in expected:
@@ -46,16 +46,18 @@ def test_clean_redeploy_run_and_journal(tmp_path):
             text = file.read_text()
             if name == dep.service_name:
                 assert exec_start in text.splitlines(), "existing service runs a different script"
-            (tmp_path / name).write_text(text)
+
+    def assert_clean():
+        for name in expected:
+            assert not (store.path / name).exists(), f"test left {name} installed"
+            assert sd.show(name, "LoadState")["LoadState"] == "not-found"
+            for suffix in ("wants", "requires", "upholds"):
+                for directory in store.path.glob(f"*.{suffix}"):
+                    assert not (directory / name).is_symlink()
 
     try:
         command("uninstall")
-        for name in expected:
-            assert not (store.path / name).exists()
-            for directory in store.path.glob("*.wants"):
-                assert not (directory / name).is_symlink()
-        for name in expected:
-            assert sd.show(name, "LoadState")["LoadState"] == "not-found"
+        assert_clean()
 
         command("install")
         for name, text in expected.items():
@@ -97,5 +99,6 @@ def test_clean_redeploy_run_and_journal(tmp_path):
         assert {event["task"] for event in completed} == set(config["tasks"])
         assert all(event["status"] == "succeeded" for event in completed)
     finally:
-        # Even a failed assertion after cleanup should leave the workflow deployed.
-        command("install")
+        # Clean up even if installation, execution, or a journal assertion fails.
+        command("uninstall")
+        assert_clean()

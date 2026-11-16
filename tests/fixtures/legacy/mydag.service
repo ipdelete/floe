@@ -1,9 +1,0 @@
-[Unit]
-Description=My DAG
-
-[Service]
-Type=oneshot
-WorkingDirectory=%h/src/floe
-ExecStart=/usr/bin/python3 %h/src/floe/workflow.py
-StandardOutput=journal
-StandardError=journal

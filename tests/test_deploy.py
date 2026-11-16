@@ -11,7 +11,6 @@ from floe.store import NotOwnedError, UnitStore
 from floe.systemd import Systemd, SystemdError
 
 ROOT = Path(__file__).parent.parent
-LEGACY = Path(__file__).parent / "fixtures" / "legacy"
 
 
 @pytest.fixture
@@ -41,7 +40,7 @@ def test_install_then_reinstall_is_idempotent(dep, tmp_path, sd):
 def test_install_refuses_foreign_units_without_adopt(dep, tmp_path, sd):
     store = UnitStore(tmp_path / "units")
     store.path.mkdir()
-    foreign = (LEGACY / "mydag.timer").read_text()
+    foreign = "[Timer]\nOnCalendar=daily\n"
     (store.path / "mydag.timer").write_text(foreign)
     with pytest.raises(NotOwnedError, match="--adopt"):
         install(dep, store, sd)

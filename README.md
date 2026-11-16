@@ -185,14 +185,16 @@ To test the real deployment lifecycle in your user systemd session:
 uv run pytest -q -m systemd_e2e --systemd-e2e
 ```
 
-**This is opt-in and changes your real workflow deployment.** It backs up existing
-owned unit files in pytest's temporary directory, uninstalls the workflow's service
-and timer, verifies cleanup, reinstalls them, checks idempotency, runs the actual
-tasks, and checks their JSON events in journald. It refuses foreign or masked
-units and an existing service pointing at a different script. It leaves the
-workflow installed with its timer enabled, including a best-effort reinstall if
-a check fails after cleanup. Run it only when it is safe to interrupt and execute
-the tasks in `workflow.py`; it does not operate on unrelated units.
+**This is opt-in and uses disposable units in your real user systemd session.**
+It uninstalls any existing owned workflow units, verifies cleanup, deploys them,
+checks idempotency, runs the actual tasks, and checks their JSON events in journald.
+A `finally` block uninstalls the service and timer and verifies that the units and
+enable links are gone, even if a test assertion fails. There are no backups or
+restored installations. It refuses foreign or masked units and an existing
+service pointing at a different script; unrelated units are untouched. Run it
+only when it is safe to interrupt and execute the tasks in `workflow.py`. Like any
+cleanup code, it cannot guarantee removal after SIGKILL or a systemd failure;
+`uv run python workflow.py uninstall` can clean up an interrupted test.
 
 Deployment is intentionally limited to generating Floe's service and timer.
 The former internal `floe.units` API (Pydantic models, generic unit parsing, and
