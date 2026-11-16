@@ -9,9 +9,9 @@ import re
 import tempfile
 from pathlib import Path
 
+from .model import NotOwnedError
 
-class NotOwnedError(PermissionError):
-    """Refused to overwrite or delete a foreign, linked, or masked unit."""
+__all__ = ["NotOwnedError", "UnitStore"]
 
 
 def _canonical(path: Path) -> Path:
@@ -52,7 +52,7 @@ class UnitStore:
         if file.is_symlink() or (file.exists() and not file.is_file()):
             raise NotOwnedError(f"{file} is not a regular file (masked or linked?)")
         if file.exists() and not adopt and not self.is_owned(name):
-            raise NotOwnedError(f"{file} is not managed by floe (use --adopt)")
+            raise NotOwnedError(f"{file} is not managed by floe (adopt to take over)")
 
     def write(self, name: str, text: str, *, adopt: bool = False) -> bool:
         """Atomically replace a unit if content changed; report whether it did."""

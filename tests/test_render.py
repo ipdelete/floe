@@ -1,11 +1,11 @@
-import subprocess
 import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
 
 from floe.deploy import Deployment
-from floe.render import exec_line
+from floe.render import environment, exec_line
 
 
 @pytest.mark.parametrize("argv,expected", [
@@ -38,7 +38,8 @@ def test_render_units_is_deterministic_and_preserves_service_settings(tmp_path):
     assert rendered == dep.render_units()
     assert set(rendered) == {"demo.service", "demo.timer"}
     service = rendered["demo.service"]
-    assert f'ExecStart=/usr/bin/python3 "{dep.script.resolve()}" run\n' in service
+    assert f'ExecStart=/usr/bin/python3 -m floe_cli run "{dep.script.resolve()}"\n' in service
+    assert f'Environment="PYTHONPATH={Path(__file__).parents[1] / "src"}"\n' in service
     for setting in ("Type=oneshot", "TimeoutStartSec=30min", "KillMode=control-group",
                     "StandardOutput=journal", "StandardError=journal", "SyslogIdentifier=demo"):
         assert f"{setting}\n" in service
@@ -54,7 +55,7 @@ def test_render_units_is_deterministic_and_preserves_service_settings(tmp_path):
 def test_literal_percent_paths_are_escaped_in_both_directives(tmp_path):
     script = tmp_path / "percent%h and $HOME" / "workflow.py"
     service = Deployment("demo", script, ["hourly"]).render_units()["demo.service"]
-    assert f'ExecStart=/usr/bin/python3 "{str(script).replace("%", "%%").replace("$", "$$")}" run\n' in service
+    assert f'ExecStart=/usr/bin/python3 -m floe_cli run "{str(script).replace("%", "%%").replace("$", "$$")}"\n' in service
     assert f'WorkingDirectory={str(script.parent).replace("%", "%%")}\n' in service
 
 
@@ -77,8 +78,17 @@ def test_schedule_is_an_immutable_snapshot(tmp_path):
     assert dep.schedule == ("hourly",)
 
 
+def test_environment_quoting():
+    assert environment("PYTHONPATH", "/a b/$HOME/100%") == 'Environment="PYTHONPATH=/a b/$HOME/100%%"'
+    for value in ['/a"b', "/a\\b", "/a\nb", ""]:
+        with pytest.raises(ValueError):
+            environment("PYTHONPATH", value)
+
+
 @pytest.mark.parametrize("field,value", [
     ("timeout", "30min\nExecStart=/bad"),
+    ("pythonpath", Path("relative/src")),
+    ("pythonpath", Path('/with "quote"')),
     ("python", "relative-python"),
     ("script", Path("/tmp/new\nline/workflow.py")),
 ])
@@ -95,7 +105,7 @@ def test_rendered_units_pass_systemd_verification(tmp_path):
     script = tmp_path / "percent%h and spaces" / "workflow.py"
     script.parent.mkdir()
     script.touch()
-    dep = Deployment("demo", script, ["*-*-* 08:00:00"])
+    dep = Deployment("demo", script, ["*-*-* 08:00:00"], pythonpath=tmp_path / "src $HOME 100%")
     files = []
     for name, text in dep.render_units().items():
         path = tmp_path / name

@@ -8,12 +8,9 @@ from __future__ import annotations
 
 import subprocess
 
+from .model import SystemdError
 
-class SystemdError(RuntimeError):
-    def __init__(self, args: list[str], returncode: int, stderr: str):
-        self.returncode = returncode
-        self.stderr = stderr
-        super().__init__(f"{' '.join(args)} failed ({returncode}): {stderr.strip()}")
+__all__ = ["Systemd", "SystemdError"]
 
 
 class Systemd:

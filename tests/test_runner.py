@@ -1,0 +1,60 @@
+from floe.model import Workflow
+from floe.runner import run
+
+
+def collect():
+    events = []
+    return events, events.append
+
+
+def test_success_events_and_dependency_order():
+    calls = []
+    workflow = Workflow("test", {name: lambda n=name: calls.append(n) for name in ("b", "a")},
+                        {"b": {"a"}, "a": set()})
+    events, on_event = collect()
+    assert run(workflow, on_event) is True
+    assert calls == ["a", "b"]
+    assert [e.event for e in events] == [
+        "run_started", "task_started", "task_completed", "task_started", "task_completed", "run_completed"]
+    assert [e.task for e in events if e.event == "task_started"] == ["a", "b"]
+    assert events[-1].status == "succeeded"
+    assert len({e.run_id for e in events}) == 1
+    assert all(e.workflow == "test" and e.timestamp for e in events)
+
+
+def test_failure_stops_dependents_and_independent_tasks():
+    calls = []
+
+    def fail():
+        calls.append("fail")
+        raise ValueError("broken input")
+
+    # "independent" does not depend on "fail", but comes after it in the order.
+    workflow = Workflow("test", {
+        "fail": fail, "independent": lambda: calls.append("independent"),
+        "dependent": lambda: calls.append("dependent"),
+    }, {"fail": set(), "independent": set(), "dependent": {"fail"}})
+    assert workflow.order.index("fail") < workflow.order.index("independent")
+    events, on_event = collect()
+    assert run(workflow, on_event) is False
+    assert calls == ["fail"]
+    assert [e.event for e in events] == ["run_started", "task_started", "task_completed", "run_completed"]
+    assert events[2].task == "fail" and events[2].status == "failed"
+    assert events[2].error == events[3].error == "broken input"
+
+
+def test_run_ids(monkeypatch):
+    workflow = Workflow("test", {}, {})
+    monkeypatch.delenv("INVOCATION_ID", raising=False)
+    first, on_event = collect()
+    run(workflow, on_event)
+    second, on_event = collect()
+    run(workflow, on_event)
+    assert first[0].run_id != second[0].run_id
+    monkeypatch.setenv("INVOCATION_ID", "systemd-invocation")
+    events, on_event = collect()
+    run(workflow, on_event)
+    assert events[0].run_id == "systemd-invocation"
+    events, on_event = collect()
+    run(workflow, on_event, run_id="explicit")
+    assert {e.run_id for e in events} == {"explicit"}

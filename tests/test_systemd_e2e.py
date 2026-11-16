@@ -5,16 +5,13 @@ to uninstall the units afterward. Normal pytest runs skip this module's test.
 """
 
 import json
-import runpy
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
 
-from floe.deploy import Deployment, user_unit_dir
-from floe.store import UnitStore
-from floe.systemd import Systemd
+import floe
 
 pytestmark = pytest.mark.systemd_e2e
 ROOT = Path(__file__).parents[1]
@@ -22,14 +19,15 @@ ROOT = Path(__file__).parents[1]
 
 def test_clean_redeploy_run_and_journal():
     script = ROOT / "workflow.py"
-    config = runpy.run_path(str(script))
-    dep = Deployment(config["WORKFLOW"], script, config["SCHEDULE"])
-    store = UnitStore(user_unit_dir())
-    sd = Systemd()
+    workflow = floe.load(script)
+    dep = floe.Deployment.for_workflow(workflow)
+    store = floe.UnitStore(floe.user_unit_dir())
+    sd = floe.Systemd()
 
-    def command(*args):
+    def command(name, *args):
+        # The real `floe` command from this environment, as a user would run it.
         result = subprocess.run(
-            [sys.executable, str(script), *args],
+            [str(Path(sys.executable).parent / "floe"), name, *args, str(script)],
             capture_output=True, text=True, timeout=60,
         )
         assert result.returncode == 0, result.stdout + result.stderr
@@ -96,7 +94,7 @@ def test_clean_redeploy_run_and_journal():
         assert events[-1]["event"] == "run_completed"
         assert events[-1]["status"] == "succeeded"
         completed = [event for event in events if event["event"] == "task_completed"]
-        assert {event["task"] for event in completed} == set(config["tasks"])
+        assert [event["task"] for event in completed] == list(workflow.order)
         assert all(event["status"] == "succeeded" for event in completed)
     finally:
         # Clean up even if installation, execution, or a journal assertion fails,

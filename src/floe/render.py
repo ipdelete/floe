@@ -42,16 +42,29 @@ def literal(value: str) -> str:
     return check_value(value, "literal value").replace("%", "%%")
 
 
-def render_service(workflow: str, script: Path, python: str, timeout: str) -> str:
+def environment(name: str, value: str) -> str:
+    """Environment= expands % specifiers but not $ variables; quote the assignment."""
+    check_value(value, f"{name} value")
+    if '"' in value or "\\" in value:
+        raise ValueError(f"{name} value must not contain quotes or backslashes: {value!r}")
+    return f'Environment="{name}={value.replace("%", "%%")}"'
+
+
+def render_service(workflow: str, script: Path, python: str, timeout: str, pythonpath: Path) -> str:
+    """The service runs `floe run <script>` with the given interpreter, finding
+    floe through PYTHONPATH so no virtual environment is needed."""
     if not python.startswith("/"):
         raise ValueError("python must be an absolute executable path")
+    if not pythonpath.is_absolute():
+        raise ValueError("pythonpath must be absolute")
     check_value(python, "python")
     check_value(str(script), "script")
     return (
         "# Managed by floe. Manual edits will be overwritten.\n\n"
         f"[Unit]\nDescription=Floe workflow {workflow}\n\n"
         "[Service]\nType=oneshot\n"
-        f"ExecStart={exec_line([python, str(script), 'run'])}\n"
+        f"ExecStart={exec_line([python, '-m', 'floe_cli', 'run', str(script)])}\n"
+        f"{environment('PYTHONPATH', str(pythonpath))}\n"
         f"WorkingDirectory={literal(str(script.parent))}\n"
         f"TimeoutStartSec={literal(timeout)}\n"
         "KillMode=control-group\nStandardOutput=journal\nStandardError=journal\n"
