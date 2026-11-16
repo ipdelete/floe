@@ -1,49 +1,45 @@
-"""Deploy a workflow script as a systemd user service + timer.
+"""Deploy a stdlib-only workflow script as a systemd user service and timer.
 
-    Deployment(...).units()       -> the unit files as models (pure, no I/O)
-    install(dep, units, sd)       -> write files, daemon-reload, enable timer
-    uninstall(dep, units, sd)     -> disable/stop, delete files, daemon-reload
-    status(dep, sd)               -> systemd's view of both units
-    cli(dep, argv)                -> argparse front end used by workflow scripts
-
-Only this module combines the file layer (floe.units) with the service
-manager (floe.systemd). The workflow runner itself never imports it, so the
-service can run under a plain /usr/bin/python3 without pydantic.
+Rendering and file storage stay separate from the thin systemctl wrapper.
+Only this module combines them; the workflow execution path never imports it.
 """
 
-from __future__ import annotations
-
 import argparse
+import os
+import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+from .render import check_value, render_service, render_timer
+from .store import UnitStore
 from .systemd import Systemd, SystemdError
-from .units import (
-    FloeSection,
-    InstallSection,
-    NotOwnedError,
-    ServiceFile,
-    ServiceSection,
-    TimerFile,
-    TimerSection,
-    UnitDir,
-    UnitFile,
-    UnitSection,
-    exec_line,
-)
-
-USER_UNIT_DIR = Path("~/.config/systemd/user").expanduser()
 
 
 @dataclass(frozen=True)
 class Deployment:
     workflow: str
     script: Path
-    schedule: list[str]
-    python: str = "/usr/bin/python3"  # the runner is stdlib-only
-    timeout: str = "30min"  # oneshot services have no start timeout by default
+    schedule: tuple[str, ...]
+    python: str = "/usr/bin/python3"
+    timeout: str = "30min"
     persistent: bool = True
+
+    def __post_init__(self) -> None:
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,246}", self.workflow):
+            raise ValueError(
+                "workflow must be 1–247 characters: letters, digits, _, ., -; "
+                "start with a letter or digit"
+            )
+        if isinstance(self.schedule, str):
+            raise ValueError("schedule must be a sequence of OnCalendar expressions, not a string")
+        schedule = tuple(self.schedule)
+        if not schedule:
+            raise ValueError("schedule must contain at least one OnCalendar expression")
+        for expression in schedule:
+            check_value(expression, "schedule")
+        object.__setattr__(self, "schedule", schedule)
+        object.__setattr__(self, "script", Path(self.script))
 
     @property
     def service_name(self) -> str:
@@ -53,59 +49,40 @@ class Deployment:
     def timer_name(self) -> str:
         return f"{self.workflow}.timer"
 
-    def units(self) -> dict[str, UnitFile]:
-        script = Path(self.script).resolve()
-        marker = FloeSection(owner="floe", workflow=self.workflow)
-        service = ServiceFile(
-            unit=UnitSection(description=f"Floe workflow {self.workflow}"),
-            service=ServiceSection(
-                type="oneshot",
-                exec_start=[exec_line([self.python, str(script), "run"])],
-                working_directory=str(script.parent),
-                timeout_start_sec=self.timeout,
-                kill_mode="control-group",
-                standard_output="journal",
-                standard_error="journal",
-                syslog_identifier=self.workflow,
-            ),
-            x_floe=marker,
-        )
-        timer = TimerFile(
-            unit=UnitSection(description=f"Schedule floe workflow {self.workflow}"),
-            timer=TimerSection(
-                on_calendar=list(self.schedule), persistent=self.persistent, unit=self.service_name
-            ),
-            install=InstallSection(wanted_by=["timers.target"]),
-            x_floe=marker,
-        )
-        return {self.service_name: service, self.timer_name: timer}
+    def render_units(self) -> dict[str, str]:
+        script = self.script.resolve()
+        return {
+            self.service_name: render_service(self.workflow, script, self.python, self.timeout),
+            self.timer_name: render_timer(self.workflow, self.schedule, self.persistent),
+        }
 
 
-def install(dep: Deployment, units: UnitDir, sd: Systemd, *, adopt: bool = False) -> list[str]:
-    """Idempotent. Returns the names of files that changed."""
-    # Validate everything before writing anything.
-    wanted = dep.units()
-    if not adopt:
-        for name in wanted:
-            if (units.path / name).exists() and name not in units:
-                raise NotOwnedError(f"{units.path / name} exists and is not managed by floe (use --adopt)")
-    changed = [name for name, unit in wanted.items() if units.put(name, unit, force=adopt)]
+def user_unit_dir() -> Path:
+    config = os.environ.get("XDG_CONFIG_HOME")
+    # XDG base directories must be absolute; ignore empty or relative values.
+    base = Path(config) if config and Path(config).is_absolute() else Path.home() / ".config"
+    return base / "systemd" / "user"
+
+
+def install(dep: Deployment, store: UnitStore, sd: Systemd, *, adopt: bool = False) -> list[str]:
+    """Render and preflight the pair before writing. Each write is atomic."""
+    wanted = dep.render_units()
+    for name in wanted:
+        store.preflight(name, adopt=adopt)
+    changed = [name for name, text in wanted.items() if store.write(name, text, adopt=adopt)]
     if changed:
         sd.daemon_reload()
-    sd.enable(dep.timer_name, now=True)  # no-op if already enabled and active
+    sd.enable(dep.timer_name, now=True)
     return changed
 
 
-def uninstall(dep: Deployment, units: UnitDir, sd: Systemd) -> list[str]:
-    removed = []
-    if dep.timer_name in units:
+def uninstall(dep: Deployment, store: UnitStore, sd: Systemd) -> list[str]:
+    owned = [name for name in (dep.timer_name, dep.service_name) if store.is_owned(name)]
+    if dep.timer_name in owned:
         sd.disable(dep.timer_name, now=True)
-    if dep.service_name in units:
+    if dep.service_name in owned:
         sd.stop(dep.service_name)
-    for name in (dep.timer_name, dep.service_name):
-        if name in units:
-            del units[name]
-            removed.append(name)
+    removed = [name for name in owned if store.remove(name)]
     if removed:
         sd.daemon_reload()
     return removed
@@ -126,8 +103,14 @@ def status(dep: Deployment, sd: Systemd) -> dict[str, dict[str, str]]:
     }
 
 
-def cli(dep: Deployment, argv: list[str], *, units: UnitDir | None = None, sd: Systemd | None = None) -> int:
-    parser = argparse.ArgumentParser(prog=Path(dep.script).name, description=f"Manage workflow {dep.workflow!r}")
+def cli(
+    dep: Deployment,
+    argv: list[str],
+    *,
+    store: UnitStore | None = None,
+    sd: Systemd | None = None,
+) -> int:
+    parser = argparse.ArgumentParser(prog=dep.script.name, description=f"Manage workflow {dep.workflow!r}")
     sub = parser.add_subparsers(dest="cmd", required=True)
     p = sub.add_parser("install", help="write unit files, reload systemd, enable the timer")
     p.add_argument("--adopt", action="store_true", help="take over existing unit files not written by floe")
@@ -137,18 +120,17 @@ def cli(dep: Deployment, argv: list[str], *, units: UnitDir | None = None, sd: S
     sub.add_parser("status", help="show systemd state for the service and timer")
     args = parser.parse_args(argv)
 
-    # `is None`, not `or`: an empty UnitDir is falsy (it's a Mapping with len 0).
-    units = UnitDir(USER_UNIT_DIR) if units is None else units
-    sd = Systemd() if sd is None else sd
     try:
+        store = UnitStore(user_unit_dir()) if store is None else store
+        sd = Systemd() if sd is None else sd
         if args.cmd == "install" and args.dry_run:
-            for name, unit in dep.units().items():
-                print(f"# {units.path / name}\n{units.render(unit)}")
+            for name, text in dep.render_units().items():
+                print(f"# {store.path / name}\n{text}")
         elif args.cmd == "install":
-            changed = install(dep, units, sd, adopt=args.adopt)
+            changed = install(dep, store, sd, adopt=args.adopt)
             print(f"wrote: {', '.join(changed) or 'nothing (up to date)'}; enabled {dep.timer_name}")
         elif args.cmd == "uninstall":
-            removed = uninstall(dep, units, sd)
+            removed = uninstall(dep, store, sd)
             print(f"removed: {', '.join(removed) or 'nothing'}")
         elif args.cmd == "start":
             sd.start(dep.service_name)
@@ -156,9 +138,9 @@ def cli(dep: Deployment, argv: list[str], *, units: UnitDir | None = None, sd: S
         elif args.cmd == "status":
             for unit, props in status(dep, sd).items():
                 print(unit)
-                for k, v in props.items():
-                    print(f"  {k}={v}")
-    except (NotOwnedError, SystemdError) as e:
-        print(f"error: {e}", file=sys.stderr)
+                for key, value in props.items():
+                    print(f"  {key}={value}")
+    except (OSError, ValueError, SystemdError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
         return 1
     return 0

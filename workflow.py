@@ -2,25 +2,12 @@ import json
 import os
 import sys
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from graphlib import TopologicalSorter
 from pathlib import Path
 
 WORKFLOW = "mydag"
 SCHEDULE = ["hourly"]  # OnCalendar= expressions, see systemd.time(7)
-
-RUN_ID = os.environ.get("INVOCATION_ID") or uuid.uuid4().hex
-
-
-def emit(event, **fields):
-    print(json.dumps({
-        "schema": 1,
-        "event": event,
-        "workflow": WORKFLOW,
-        "run_id": RUN_ID,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        **fields,
-    }), flush=True)
 
 
 def fetch():
@@ -48,14 +35,36 @@ dag = {
 }
 
 
-def main():
+def run_workflow(workflow, tasks, dependencies):
+    """Validate and execute a DAG sequentially, emitting JSON lifecycle events."""
+    run_id = os.environ.get("INVOCATION_ID") or uuid.uuid4().hex
+
+    def emit(event, **fields):
+        print(json.dumps({
+            "schema": 1,
+            "event": event,
+            "workflow": workflow,
+            "run_id": run_id,
+            "timestamp": datetime.now(UTC).isoformat(),
+            **fields,
+        }), flush=True)
+
     emit("run_started")
     try:
-        # Validate the entire graph before executing any tasks.
-        nodes = set(dag).union(*dag.values())
-        if nodes != set(tasks):
-            raise ValueError("DAG nodes and task functions must match")
-        order = list(TopologicalSorter(dag).static_order())
+        for name, task in tasks.items():
+            if not isinstance(name, str) or not name:
+                raise ValueError(f"Task names must be nonempty strings: {name!r}")
+            if not callable(task):
+                raise ValueError(f"Task {name!r} is not callable")
+        # Materialize the entire order so cycles cannot cause partial execution.
+        if tasks.keys() != dependencies.keys():
+            missing = sorted(tasks.keys() - dependencies.keys())
+            extra = sorted(dependencies.keys() - tasks.keys())
+            raise ValueError(f"DAG entries: missing={missing}, extra={extra}")
+        unknown = set().union(*dependencies.values()) - tasks.keys()
+        if unknown:
+            raise ValueError(f"Unknown prerequisites: {sorted(unknown)}")
+        order = list(TopologicalSorter(dependencies).static_order())
 
         for name in order:
             emit("task_started", task=name)
@@ -75,6 +84,10 @@ def main():
     return 0
 
 
+def main():
+    return run_workflow(WORKFLOW, tasks, dag)
+
+
 if __name__ == "__main__":
     # `run` (or no argument) executes the workflow: this is what systemd calls,
     # with /usr/bin/python3 and only the standard library.
@@ -86,4 +99,8 @@ if __name__ == "__main__":
         from floe.deploy import Deployment, cli
     except ImportError:
         sys.exit(f"'{sys.argv[1]}' needs the floe package; run: uv run python workflow.py {' '.join(sys.argv[1:])}")
-    sys.exit(cli(Deployment(WORKFLOW, Path(__file__), SCHEDULE), sys.argv[1:]))
+    try:
+        deployment = Deployment(WORKFLOW, Path(__file__), SCHEDULE)
+    except (ValueError, TypeError) as exc:
+        sys.exit(f"error: {exc}")
+    sys.exit(cli(deployment, sys.argv[1:]))

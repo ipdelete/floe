@@ -3,7 +3,7 @@
 A minimal local workflow runner using Python, systemd timers, and journald.
 Tasks are Python functions executed sequentially in dependency order. systemd
 handles scheduling and process lifecycle; journald stores execution history.
-The runner uses only the standard library; the deployment commands use pydantic.
+Both the runner and deployment commands use only the Python standard library.
 There are no retries or parallel execution.
 
 ## Requirements
@@ -41,15 +41,18 @@ dag = {
 ```
 
 Every task must appear in the DAG, including tasks with no prerequisites.
-Task names and DAG nodes must match. The runner checks for missing tasks and
-cycles before executing any task.
+Task names must be nonempty strings and must match the DAG entries. The runner
+checks that tasks are callable and rejects missing entries, unknown prerequisites,
+and cycles before executing any task.
 
 Tasks run one at a time. An exception stops the workflow, records failure, and
 returns a nonzero exit code. Tasks following the failure are not executed,
 including independent tasks later in the execution order.
 
 Set `WORKFLOW` for the workflow name (also the systemd unit name) and
-`SCHEDULE` for when it runs.
+`SCHEDULE` for when it runs. Workflow names must be 1–247 ASCII characters,
+start with a letter or digit, and contain only letters, digits, `_`, `.` or `-`.
+The schedule must contain at least one nonempty `OnCalendar=` expression.
 Send ordinary task messages to stderr so stdout remains newline-delimited JSON:
 
 ```python
@@ -75,8 +78,8 @@ available, otherwise a generated UUID.
 ## Deploy with systemd
 
 The unit files are generated from `workflow.py`; there are no hand-written
-units to copy. Deployment commands need the `floe` package (and pydantic), so
-run them through `uv`:
+units to copy. Deployment commands need the local `floe` package, so run them
+through `uv` (there are no third-party runtime dependencies):
 
 ```bash
 uv run python workflow.py install --dry-run   # print the unit files, change nothing
@@ -86,11 +89,17 @@ uv run python workflow.py status              # systemd's view of service and ti
 uv run python workflow.py uninstall           # disable, stop, delete the unit files
 ```
 
-`install` writes `~/.config/systemd/user/<WORKFLOW>.service` and `.timer`,
-marked with an `[X-Floe]` section. It is idempotent: when nothing changed it
-writes nothing and skips `daemon-reload`. It refuses to overwrite unit files
+`install` writes `<config>/systemd/user/<WORKFLOW>.service` and `.timer`,
+where `<config>` is `$XDG_CONFIG_HOME` when set to an absolute path, otherwise
+`~/.config`. Files are marked with an `[X-Floe]` section. Installation is
+idempotent: when nothing changed it writes nothing and skips `daemon-reload`.
+It refuses to overwrite unit files
 it did not write; use `install --adopt` to take over existing units of the same
 name (for example ones installed by hand from an earlier version of this README).
+Masked units, symlinks, and directories are never overwritten, even with `--adopt`.
+Both unit files are rendered and their destinations checked before either is
+written. Each replacement is atomic, but the pair is not a transaction: an
+unexpected I/O or systemd failure can still require rerunning `install`.
 
 The generated service runs `/usr/bin/python3 <path>/workflow.py run` with the
 script's directory as working directory, `TimeoutStartSec=30min` (oneshot
@@ -158,3 +167,35 @@ Journald is the only execution-history store. Retention depends on the machine's
 journal configuration and storage limits; logs may be rotated or lost across
 reboots without persistent journaling. A forcibly terminated workflow may have
 no `run_completed` event.
+
+## Development
+
+```bash
+uv run pytest -q
+uv run python examples/deploy_demo.py  # render units without writing or calling systemd
+```
+
+Normal tests use temporary directories and mock the service manager. When
+available, `systemd-analyze verify` also checks generated units without installing
+them.
+
+To test the real deployment lifecycle in your user systemd session:
+
+```bash
+uv run pytest -q -m systemd_e2e --systemd-e2e
+```
+
+**This is opt-in and changes your real workflow deployment.** It backs up existing
+owned unit files in pytest's temporary directory, uninstalls the workflow's service
+and timer, verifies cleanup, reinstalls them, checks idempotency, runs the actual
+tasks, and checks their JSON events in journald. It refuses foreign or masked
+units and an existing service pointing at a different script. It leaves the
+workflow installed with its timer enabled, including a best-effort reinstall if
+a check fails after cleanup. Run it only when it is safe to interrupt and execute
+the tasks in `workflow.py`; it does not operate on unrelated units.
+
+Deployment is intentionally limited to generating Floe's service and timer.
+The former internal `floe.units` API (Pydantic models, generic unit parsing, and
+`UnitDir`) has been removed. Use `Deployment.render_units()` to inspect generated
+text; Floe does not provide general-purpose editing of existing systemd units.
+There is no standalone `floe` command: use the commands on `workflow.py` above.
