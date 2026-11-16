@@ -6,7 +6,7 @@ from unittest.mock import call, create_autospec
 
 import pytest
 
-from floe.deploy import Deployment, cli, install, uninstall
+from floe.deploy import Deployment, UninstallError, cli, install, uninstall
 from floe.store import NotOwnedError, UnitStore
 from floe.systemd import Systemd, SystemdError
 
@@ -23,7 +23,9 @@ def dep(tmp_path):
 
 @pytest.fixture
 def sd():
-    return create_autospec(Systemd, instance=True)
+    sd = create_autospec(Systemd, instance=True)
+    sd.show.return_value = {"LoadState": "not-found", "ActiveState": "inactive", "FragmentPath": ""}
+    return sd
 
 
 def test_install_then_reinstall_is_idempotent(dep, tmp_path, sd):
@@ -81,11 +83,103 @@ def test_uninstall(dep, tmp_path, sd):
     install(dep, store, sd)
     sd.reset_mock()
     assert uninstall(dep, store, sd) == ["mydag.timer", "mydag.service"]
-    assert sd.mock_calls == [call.disable("mydag.timer", now=True), call.stop("mydag.service"), call.daemon_reload()]
+    assert [c for c in sd.mock_calls if c[0] != "show"] == [
+        call.disable("mydag.timer", now=True),
+        call.stop("mydag.service", missing_ok=True),
+        call.daemon_reload(),
+    ]
     assert list(store.path.iterdir()) == []
     sd.reset_mock()
     assert uninstall(dep, store, sd) == []
-    assert sd.mock_calls == []
+    assert {c[0] for c in sd.mock_calls} == {"show"}  # only checks for stale units
+
+
+def _install_enabled(dep, store, sd):
+    install(dep, store, sd)
+    wants = store.path / "timers.target.wants"
+    wants.mkdir()
+    (wants / dep.timer_name).symlink_to(store.path / dep.timer_name)
+    sd.reset_mock()
+    return wants / dep.timer_name
+
+
+def test_uninstall_continues_after_stop_failure_and_reports(dep, tmp_path, sd):
+    store = UnitStore(tmp_path / "units")
+    link = _install_enabled(dep, store, sd)
+    sd.stop.side_effect = SystemdError(["systemctl", "stop"], 1, "stop timed out")
+    with pytest.raises(UninstallError, match="stop timed out") as caught:
+        uninstall(dep, store, sd)
+    assert caught.value.removed == ["mydag.timer", "mydag.service"]
+    assert not (store.path / dep.service_name).exists()
+    assert not (store.path / dep.timer_name).exists()
+    assert not link.is_symlink()
+    sd.daemon_reload.assert_called_once()
+
+
+def test_uninstall_falls_back_to_stop_when_disable_fails(dep, tmp_path, sd):
+    store = UnitStore(tmp_path / "units")
+    install(dep, store, sd)
+    sd.reset_mock()
+    sd.disable.side_effect = SystemdError(["systemctl", "disable"], 1, "bus error")
+    with pytest.raises(UninstallError, match="bus error"):
+        uninstall(dep, store, sd)
+    sd.stop.assert_any_call(dep.timer_name, missing_ok=True)
+    assert list(store.path.iterdir()) == []
+
+
+def test_uninstall_rerun_finishes_after_failed_reload(dep, tmp_path, sd):
+    store = UnitStore(tmp_path / "units")
+    link = _install_enabled(dep, store, sd)
+    sd.daemon_reload.side_effect = SystemdError(["systemctl", "daemon-reload"], 1, "reload failed")
+    loaded = {name: {"LoadState": "loaded", "ActiveState": "active" if name == dep.timer_name else "inactive",
+                     "FragmentPath": str(store.path / name)} for name in dep.render_units()}
+    sd.show.side_effect = lambda name, *props: loaded[name]
+    with pytest.raises(UninstallError, match="still loaded"):
+        uninstall(dep, store, sd)
+    assert list(store.path.glob("mydag.*")) == []
+
+    # The files are gone but systemd still has them loaded; leave a dangling link too.
+    link.symlink_to(store.path / dep.timer_name)
+    sd.reset_mock(side_effect=True)
+    reloaded = []
+    sd.daemon_reload.side_effect = lambda: reloaded.append(True)
+    sd.show.side_effect = lambda name, *props: (
+        {"LoadState": "not-found", "ActiveState": "inactive", "FragmentPath": ""} if reloaded else loaded[name])
+    assert uninstall(dep, store, sd) == []
+    sd.stop.assert_any_call(dep.timer_name, missing_ok=True)
+    sd.stop.assert_any_call(dep.service_name, missing_ok=True)
+    sd.disable.assert_not_called()
+    assert reloaded
+    assert not link.is_symlink()
+
+
+def test_uninstall_ignores_same_named_units_loaded_elsewhere(dep, tmp_path, sd):
+    store = UnitStore(tmp_path / "units")
+    sd.show.return_value = {"LoadState": "loaded", "ActiveState": "active",
+                            "FragmentPath": "/usr/lib/systemd/user/mydag.service"}
+    assert uninstall(dep, store, sd) == []
+    assert {c[0] for c in sd.mock_calls} == {"show"}
+
+
+def test_uninstall_reports_service_still_running(dep, tmp_path, sd):
+    store = UnitStore(tmp_path / "units")
+    install(dep, store, sd)
+    sd.reset_mock()
+    sd.show.side_effect = lambda name, *props: {
+        "LoadState": "not-found", "FragmentPath": "",
+        "ActiveState": "deactivating" if name == dep.service_name else "inactive"}
+    with pytest.raises(UninstallError, match="mydag.service is still deactivating"):
+        uninstall(dep, store, sd)
+
+
+def test_cli_uninstall_reports_partial_failure(dep, tmp_path, sd, capsys):
+    store = UnitStore(tmp_path / "units")
+    install(dep, store, sd)
+    sd.stop.side_effect = SystemdError(["systemctl", "stop"], 1, "stop timed out")
+    assert cli(dep, ["uninstall"], store=store, sd=sd) == 1
+    out, err = capsys.readouterr()
+    assert "removed: mydag.timer, mydag.service" in out
+    assert "stop timed out" in err and "rerun uninstall" in err and "Traceback" not in err
 
 
 def test_uninstall_leaves_foreign_files_and_systemd_alone(dep, tmp_path, sd):

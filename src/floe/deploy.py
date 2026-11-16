@@ -76,15 +76,86 @@ def install(dep: Deployment, store: UnitStore, sd: Systemd, *, adopt: bool = Fal
     return changed
 
 
+class UninstallError(RuntimeError):
+    """Uninstall did every step it could, but some failed or left state behind."""
+
+    def __init__(self, removed: list[str], errors: list[str]):
+        self.removed = removed
+        self.errors = errors
+        super().__init__("uninstall incomplete:\n  " + "\n  ".join(errors))
+
+
+_RUNNING = ("active", "activating", "deactivating", "reloading", "refreshing")
+
+
 def uninstall(dep: Deployment, store: UnitStore, sd: Systemd) -> list[str]:
-    owned = [name for name in (dep.timer_name, dep.service_name) if store.is_owned(name)]
+    """Best effort: attempt every step, then verify, then report all failures.
+
+    A unit is ours if its file is owned, or if the file is gone but systemd
+    still has it loaded from our path (an earlier uninstall was interrupted).
+    Foreign, masked, or linked files and same-named units elsewhere are left alone.
+    Rerunning after a failure continues where the previous attempt stopped.
+    """
+    names = (dep.timer_name, dep.service_name)
+    errors: list[str] = []
+
+    def attempt(fn, *args, **kwargs) -> bool:
+        try:
+            fn(*args, **kwargs)
+            return True
+        except (OSError, SystemdError) as exc:
+            errors.append(str(exc))
+            return False
+
+    def loaded_from_store(name: str) -> bool:
+        try:
+            props = sd.show(name, "LoadState", "FragmentPath")
+        except SystemdError as exc:
+            errors.append(str(exc))
+            return False
+        return props.get("LoadState") != "not-found" and store.owns_path(name, props.get("FragmentPath", ""))
+
+    owned = {name for name in names if store.is_owned(name)}
+    present = {name for name in names if (store.path / name).exists() or (store.path / name).is_symlink()}
+    stale = {name for name in names if name not in present and loaded_from_store(name)}
+    ours = [name for name in names if name in owned or name in stale]
+
+    # Stop new activations first, then the current run.
     if dep.timer_name in owned:
-        sd.disable(dep.timer_name, now=True)
-    if dep.service_name in owned:
-        sd.stop(dep.service_name)
-    removed = [name for name in owned if store.remove(name)]
-    if removed:
-        sd.daemon_reload()
+        if not attempt(sd.disable, dep.timer_name, now=True):
+            attempt(sd.stop, dep.timer_name, missing_ok=True)
+    elif dep.timer_name in stale:
+        attempt(sd.stop, dep.timer_name, missing_ok=True)
+    if dep.service_name in ours:
+        attempt(sd.stop, dep.service_name, missing_ok=True)
+
+    # Remove files even if stopping failed: the timer can no longer start new
+    # runs, and systemd keeps managing a running process until it exits.
+    removed = []
+    for name in names:
+        if name in owned:
+            if attempt(store.remove, name):
+                removed.append(name)
+        elif name not in present:
+            attempt(store.remove_links, name)  # dangling links from an interrupted run
+
+    if not ours:
+        return removed
+    attempt(sd.daemon_reload)
+
+    for name in ours:
+        try:
+            props = sd.show(name, "LoadState", "ActiveState", "FragmentPath")
+        except SystemdError as exc:
+            errors.append(str(exc))
+            continue
+        fragment = props.get("FragmentPath", "")
+        if props.get("LoadState") != "not-found" and store.owns_path(name, fragment):
+            errors.append(f"{name} is still loaded from {fragment}")
+        elif props.get("ActiveState") in _RUNNING and (not fragment or store.owns_path(name, fragment)):
+            errors.append(f"{name} is still {props['ActiveState']}")
+    if errors:
+        raise UninstallError(removed, errors)
     return removed
 
 
@@ -130,7 +201,12 @@ def cli(
             changed = install(dep, store, sd, adopt=args.adopt)
             print(f"wrote: {', '.join(changed) or 'nothing (up to date)'}; enabled {dep.timer_name}")
         elif args.cmd == "uninstall":
-            removed = uninstall(dep, store, sd)
+            try:
+                removed = uninstall(dep, store, sd)
+            except UninstallError as exc:
+                print(f"removed: {', '.join(exc.removed) or 'nothing'}")
+                print(f"error: {exc}\nrerun uninstall to retry", file=sys.stderr)
+                return 1
             print(f"removed: {', '.join(removed) or 'nothing'}")
         elif args.cmd == "start":
             sd.start(dep.service_name)

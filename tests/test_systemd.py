@@ -39,3 +39,12 @@ def test_systemctl_failure_preserves_diagnostics(monkeypatch):
         Systemd().start("demo.service")
     assert caught.value.returncode == 1
     assert caught.value.stderr == "no user session\n"
+
+
+def test_stop_missing_ok_accepts_unloaded_unit(monkeypatch):
+    monkeypatch.setattr("floe.systemd.subprocess.run", Mock(
+        return_value=subprocess.CompletedProcess([], 5, "", "Unit demo.service not loaded.\n"),
+    ))
+    Systemd().stop("demo.service", missing_ok=True)
+    with pytest.raises(SystemdError, match="not loaded"):
+        Systemd().stop("demo.service")

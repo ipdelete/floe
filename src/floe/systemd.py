@@ -20,10 +20,10 @@ class Systemd:
     def __init__(self, user: bool = True):
         self.base = ["systemctl", "--user"] if user else ["systemctl"]
 
-    def _run(self, *args: str) -> str:
+    def _run(self, *args: str, ok: tuple[int, ...] = (0,)) -> str:
         cmd = [*self.base, *args]
         r = subprocess.run(cmd, capture_output=True, text=True)
-        if r.returncode:
+        if r.returncode not in ok:
             raise SystemdError(cmd, r.returncode, r.stderr)
         return r.stdout
 
@@ -40,8 +40,9 @@ class Systemd:
         """For Type=oneshot, waits until the service has finished unless wait=False."""
         self._run("start", *([] if wait else ["--no-block"]), unit)
 
-    def stop(self, unit: str) -> None:
-        self._run("stop", unit)
+    def stop(self, unit: str, missing_ok: bool = False) -> None:
+        """With missing_ok, a unit that is not loaded (exit 5) counts as stopped."""
+        self._run("stop", unit, ok=(0, 5) if missing_ok else (0,))
 
     def show(self, unit: str, *props: str) -> dict[str, str]:
         out = self._run("show", unit, f"--property={','.join(props)}")

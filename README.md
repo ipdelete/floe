@@ -97,6 +97,12 @@ It refuses to overwrite unit files
 it did not write; use `install --adopt` to take over existing units of the same
 name (for example ones installed by hand from an earlier version of this README).
 Masked units, symlinks, and directories are never overwritten, even with `--adopt`.
+`uninstall` is best-effort: it attempts every step (disable and stop, remove
+files and enable links, `daemon-reload`), then checks that systemd no longer
+has the units loaded from Floe's files and that the service is not still
+running. Any failures are reported together with a nonzero exit code. Rerunning
+it continues an interrupted uninstall, including units whose files are gone but
+are still loaded. Same-named units loaded from other directories are not touched.
 Both unit files are rendered and their destinations checked before either is
 written. Each replacement is atomic, but the pair is not a transaction: an
 unexpected I/O or systemd failure can still require rerunning `install`.

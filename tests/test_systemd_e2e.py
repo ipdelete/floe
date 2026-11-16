@@ -99,6 +99,9 @@ def test_clean_redeploy_run_and_journal():
         assert {event["task"] for event in completed} == set(config["tasks"])
         assert all(event["status"] == "succeeded" for event in completed)
     finally:
-        # Clean up even if installation, execution, or a journal assertion fails.
-        command("uninstall")
-        assert_clean()
+        # Clean up even if installation, execution, or a journal assertion fails,
+        # and verify cleanup even if uninstall itself reports an error.
+        try:
+            command("uninstall")
+        finally:
+            assert_clean()

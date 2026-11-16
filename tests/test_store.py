@@ -83,6 +83,25 @@ def test_delete_removes_only_links_targeting_deleted_unit(tmp_path):
     assert (tmp_path / "other.target.requires" / "demo.timer").is_symlink()
 
 
+def test_remove_cleans_dangling_links_when_file_already_gone(tmp_path):
+    store = UnitStore(tmp_path)
+    wants = tmp_path / "timers.target.wants"
+    wants.mkdir()
+    (wants / "demo.timer").symlink_to(tmp_path / "demo.timer")
+    (wants / "other.timer").symlink_to(tmp_path / "other.timer")
+    assert not store.remove("demo.timer")
+    assert not (wants / "demo.timer").is_symlink()
+    assert (wants / "other.timer").is_symlink()
+
+
+def test_owns_path(tmp_path):
+    store = UnitStore(tmp_path)
+    assert store.owns_path("demo.timer", str(tmp_path / "demo.timer"))
+    assert store.owns_path("demo.timer", str(tmp_path / "sub" / ".." / "demo.timer"))
+    assert not store.owns_path("demo.timer", "/usr/lib/systemd/user/demo.timer")
+    assert not store.owns_path("demo.timer", "")
+
+
 def test_failed_atomic_replace_keeps_original_and_cleans_temp(tmp_path, monkeypatch):
     store = UnitStore(tmp_path)
     store.write("demo.service", OWNED)

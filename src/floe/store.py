@@ -14,6 +14,12 @@ class NotOwnedError(PermissionError):
     """Refused to overwrite or delete a foreign, linked, or masked unit."""
 
 
+def _canonical(path: Path) -> Path:
+    """Normalize a path whose final component may not exist (or be a symlink)."""
+    path = Path(os.path.normpath(path))
+    return Path(os.path.realpath(path.parent)) / path.name
+
+
 class UnitStore:
     def __init__(self, path: str | os.PathLike[str]):
         self.path = Path(path).expanduser()
@@ -58,19 +64,36 @@ class UnitStore:
         return True
 
     def remove(self, name: str) -> bool:
-        """Remove an owned unit and enable links pointing to it. Missing is OK."""
+        """Remove an owned unit and enable links pointing to it; report whether
+        the unit file existed. A missing file is OK: dangling enable links left
+        by an interrupted removal are still cleaned up."""
         file = self._file(name)
-        if not file.exists() and not file.is_symlink():
-            return False
-        self.preflight(name)
-        file.unlink()
+        existed = file.exists() or file.is_symlink()
+        if existed:
+            self.preflight(name)
+            file.unlink()
+        self.remove_links(name)
+        return existed
+
+    def remove_links(self, name: str) -> list[Path]:
+        """Remove enable links to this directory's unit, even if dangling."""
+        file = self._file(name)
+        if not self.path.is_dir():
+            return []
+        wanted = _canonical(file)
+        removed = []
         for directory in self.path.iterdir():
             if (directory.is_dir() and not directory.is_symlink()
                     and directory.suffix in (".wants", ".requires", ".upholds")):
                 link = directory / name
-                if link.is_symlink() and link.resolve() == file.resolve():
+                if link.is_symlink() and _canonical(link.parent / os.readlink(link)) == wanted:
                     link.unlink()
-        return True
+                    removed.append(link)
+        return removed
+
+    def owns_path(self, name: str, path: str) -> bool:
+        """Whether a path reported by systemd is this store's file for name."""
+        return bool(path) and _canonical(Path(path)) == _canonical(self._file(name))
 
     @staticmethod
     def _atomic_write(file: Path, text: str) -> None:
