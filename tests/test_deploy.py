@@ -232,6 +232,30 @@ def test_uninstall_rerun_finishes_after_failed_reload(dep, tmp_path, sd):
     assert not link.is_symlink()
 
 
+def test_uninstall_resets_failed_units_so_systemd_forgets_them(dep, tmp_path, sd):
+    store = UnitStore(tmp_path / "units")
+    install(dep, store, sd)
+    sd.reset_mock()
+    failed = {dep.service_name}  # the last run failed: the unit lingers after removal
+    sd.reset_failed.side_effect = failed.discard
+    sd.show.side_effect = lambda name, *props: {
+        "LoadState": "not-found", "FragmentPath": "",
+        "ActiveState": "failed" if name in failed else "inactive"}
+    assert uninstall(dep.workflow, store, sd) == ["mydag.timer", "mydag.service"]
+    sd.reset_failed.assert_called_once_with(dep.service_name)
+
+
+def test_uninstall_reports_failed_state_that_could_not_be_reset(dep, tmp_path, sd):
+    store = UnitStore(tmp_path / "units")
+    install(dep, store, sd)
+    sd.reset_failed.side_effect = SystemdError(["systemctl", "reset-failed"], 1, "bus error")
+    sd.show.side_effect = lambda name, *props: {
+        "LoadState": "not-found", "FragmentPath": "",
+        "ActiveState": "failed" if name == dep.service_name else "inactive"}
+    with pytest.raises(UninstallError, match="mydag.service is still failed"):
+        uninstall(dep.workflow, store, sd)
+
+
 def test_uninstall_ignores_same_named_units_loaded_elsewhere(dep, tmp_path, sd):
     store = UnitStore(tmp_path / "units")
     sd.show.return_value = {"LoadState": "loaded", "ActiveState": "active",

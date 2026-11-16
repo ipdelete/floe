@@ -110,7 +110,8 @@ require rerunning `install`.
 `uninstall` is best-effort: it attempts every step (disable and stop, remove
 files and enable links, `daemon-reload`), then checks that systemd no longer
 has the units loaded from Floe's files and that the service is not still
-running. Any failures are reported together with a nonzero exit code. Rerunning
+running, resetting a failed state so systemd forgets the unit. Any failures are
+reported together with a nonzero exit code. Rerunning
 it continues an interrupted uninstall, including units whose files are gone but
 are still loaded. Same-named units loaded from other directories are not touched.
 
@@ -149,32 +150,42 @@ creates new units: `floe uninstall <old-name>` first.
 
 ## Inspect execution history
 
-View recent workflow events and task output:
+Every run under systemd (scheduled or `floe start`) is recorded in journald.
+Floe reconstructs runs from those records:
 
 ```bash
-journalctl --user -u mydag.service --since "24 hours ago" --no-pager
+floe runs mydag                       # latest 20 runs, newest first
+floe runs mydag --since "24 hours ago" -n 50
+floe logs mydag                       # events and output of the latest run
+floe logs mydag 4581dde1              # a specific run, by ID or unique prefix
+floe runs mydag --json                # also: floe logs mydag --json
 ```
 
-Follow logs as executions occur:
-
-```bash
-journalctl --user -u mydag.service -f
+```
+RUN       STARTED              STATUS     DURATION  DETAIL
+6904b066  2026-11-16 07:46:18  failed     0.1s      invalid workflow: unknown prerequisites: 'missing'
+29b24993  2026-11-16 07:45:25  failed     2.3s      transform: broken input
+ca9f4c32  2026-11-16 07:34:38  succeeded  0.0s
 ```
 
-Read journal records as JSON:
+A run's ID is its systemd invocation ID. Its status is:
 
-```bash
-journalctl --user -u mydag.service --since "24 hours ago" -o json --no-pager
-```
+- `succeeded` / `failed`: from the run's `run_completed` event. A run that
+  failed before starting (for example an invalid definition) is `failed` with
+  no tasks, and its error output as the error.
+- `running`: no `run_completed` yet and the service is still active.
+- `incomplete`: the run started but ended without `run_completed` (killed,
+  timed out, crashed), with systemd's result (such as `timeout`) when known.
 
-With `-o json`, each line is a journal record. Workflow event JSON is contained
-in its `MESSAGE` field; ordinary task output and systemd lifecycle messages are
-also present. Use the event's `run_id` to distinguish executions.
+`floe logs` shows systemd's messages, Floe's events, and task output in order,
+with output attributed to the task that was running. Runs of `floe run` outside
+systemd are not in the journal and do not appear.
 
 Journald is the only execution-history store. Retention depends on the machine's
 journal configuration and storage limits; logs may be rotated or lost across
-reboots without persistent journaling. A forcibly terminated workflow may have
-no `run_completed` event.
+reboots without persistent journaling. The raw records are also available with
+`journalctl --user -u mydag.service` (add `-o json` for structured records, `-f`
+to follow).
 
 ## Architecture
 
@@ -187,9 +198,11 @@ src/floe/        library: all logic, no user I/O
   loader.py      load(path) -> Workflow
   runner.py      run(workflow, on_event) -> bool
   deploy.py      Deployment, plan_install/apply/install, uninstall, start, status
+  history.py     list_runs, get_run, run_logs -> Run, TaskRun, RunLogs, LogLine
   render.py      unit file text
   store.py       ownership-protected unit files
   systemd.py     thin systemctl wrapper
+  journal.py     thin journalctl wrapper
 src/floe_cli/    the `floe` command: arguments in, text and exit codes out
 ```
 
@@ -212,6 +225,9 @@ floe.run(workflow, on_event=lambda event: print(event.to_dict()))
 plan = floe.plan_install(floe.Deployment.for_workflow(workflow), floe.UnitStore(floe.user_unit_dir()))
 for change in plan.changes:
     print(change.name, change.action, change.diff())
+
+for past in floe.list_runs("mydag", floe.Journal(), floe.Systemd(), limit=5):
+    print(past.run_id, past.status, past.duration, past.failed_task)
 ```
 
 ## Development
@@ -221,7 +237,8 @@ uv run pytest -q
 uv run python examples/deploy_demo.py  # plan a deployment without writing or calling systemd
 ```
 
-Normal tests use temporary directories and mock the service manager. When
+Normal tests use temporary directories and mock the service manager. History
+tests use journal records captured from real systemd (`tests/fixtures`). When
 available, `systemd-analyze verify` also checks generated units without installing
 them. A test runs the exact service command with the system Python and no
 virtual environment.
@@ -235,7 +252,7 @@ uv run pytest -q -m systemd_e2e --systemd-e2e
 **This is opt-in and uses disposable units in your real user systemd session.**
 It runs the `floe` command to uninstall any existing owned workflow units,
 verify cleanup, deploy them, check idempotency, run the actual tasks, and check
-their JSON events in journald. A `finally` block uninstalls the service and
+their JSON events in journald and in `floe runs`/`floe logs`. A `finally` block uninstalls the service and
 timer and verifies that the units and enable links are gone, even if a test
 assertion or the uninstall itself fails. There are no backups or restored
 installations. It refuses foreign or masked units and an existing service

@@ -209,16 +209,30 @@ def uninstall(workflow: str, store: UnitStore, sd: Systemd) -> list[str]:
         return removed
     attempt(sd.daemon_reload)
 
-    for name in ours:
+    def state(name: str) -> dict[str, str] | None:
         try:
             props = sd.show(name, "LoadState", "ActiveState", "FragmentPath")
         except SystemdError as exc:
             errors.append(str(exc))
-            continue
+            return None
         fragment = props.get("FragmentPath", "")
-        if props.get("LoadState") != "not-found" and store.owns_path(name, fragment):
-            errors.append(f"{name} is still loaded from {fragment}")
-        elif props.get("ActiveState") in _RUNNING and (not fragment or store.owns_path(name, fragment)):
+        # Only judge a unit that is (or was) ours, not a same-named one elsewhere.
+        return props if not fragment or store.owns_path(name, fragment) else None
+
+    for name in ours:
+        # A unit whose last run failed stays in memory, even with its file gone,
+        # until its failed state is reset.
+        props = state(name)
+        if props is not None and props.get("ActiveState") == "failed":
+            attempt(sd.reset_failed, name)
+
+    for name in ours:
+        props = state(name)
+        if props is None:
+            continue
+        if props.get("LoadState") != "not-found":
+            errors.append(f"{name} is still loaded from {props.get('FragmentPath')}")
+        elif props.get("ActiveState") in (*_RUNNING, "failed"):
             errors.append(f"{name} is still {props['ActiveState']}")
     if errors:
         raise UninstallError(removed, errors)

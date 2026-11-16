@@ -41,6 +41,10 @@ class Systemd:
         """With missing_ok, a unit that is not loaded (exit 5) counts as stopped."""
         self._run("stop", unit, ok=(0, 5) if missing_ok else (0,))
 
+    def reset_failed(self, unit: str) -> None:
+        """Forget a unit's failed state, so systemd can unload a removed unit."""
+        self._run("reset-failed", unit)
+
     def show(self, unit: str, *props: str) -> dict[str, str]:
         out = self._run("show", unit, f"--property={','.join(props)}")
         return dict(line.split("=", 1) for line in out.splitlines() if "=" in line)

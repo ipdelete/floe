@@ -9,6 +9,7 @@ from pathlib import Path
 from unittest.mock import call, create_autospec
 
 import pytest
+from journal_fakes import FakeJournal, Run
 
 from floe.store import UnitStore
 from floe.systemd import Systemd, SystemdError
@@ -143,12 +144,77 @@ def test_bad_targets_are_concise_errors(args, sd, capsys):
     assert sd.mock_calls == []
 
 
+def test_failed_start_points_to_logs(sd, capsys):
+    sd.start.side_effect = SystemdError(["systemctl", "start"], 1, "Job failed")
+    assert main(["start", "mydag"], sd=sd) == 1
+    assert capsys.readouterr().err == "error: mydag.service failed; see: floe logs mydag\n"
+
+
+def test_runs_detail_for_failure_before_start_is_one_line(sd, capsys):
+    r = Run("c" * 32).starting().output("error: invalid workflow:").output("  - unknown prerequisites: 'x'").failed()
+    assert main(["runs", "mydag"], sd=sd, journal=FakeJournal(r.records)) == 0
+    assert capsys.readouterr().out.splitlines()[1].endswith("invalid workflow: unknown prerequisites: 'x'")
+
+
 @pytest.mark.parametrize("error", [OSError("disk error"), SystemdError(["systemctl"], 1, "no session")])
 def test_expected_failures_are_reported(sd, capsys, error):
     sd.start.side_effect = error
     assert main(["start", "mydag"], sd=sd) == 1
     err = capsys.readouterr().err
     assert "error:" in err and "Traceback" not in err
+
+
+def history_journal():
+    ok = Run("a" * 32).succeeded_run(tasks=("fetch",))
+    bad = Run("b" * 32, ok.us + 60_000_000).starting().event("run_started").event("task_started", task="fetch")
+    bad.output("fetching")
+    bad.event("task_completed", task="fetch", status="failed", error="broken input")
+    bad.event("run_completed", status="failed", error="broken input").failed()
+    return FakeJournal(ok.records + bad.records)
+
+
+def test_runs_table(sd, capsys):
+    sd.show.return_value = {"ActiveState": "inactive"}
+    assert main(["runs", "mydag", "--since", "today", "-n", "5"], sd=sd, journal=history_journal()) == 0
+    lines = capsys.readouterr().out.splitlines()
+    assert lines[0].split() == ["RUN", "STARTED", "STATUS", "DURATION", "DETAIL"]
+    assert lines[1].startswith("bbbbbbbb ") and "failed" in lines[1] and lines[1].endswith("fetch: broken input")
+    assert lines[2].startswith("aaaaaaaa ") and "succeeded" in lines[2]
+
+
+def test_runs_json_and_empty(sd, capsys):
+    assert main(["runs", "mydag", "--json"], sd=sd, journal=history_journal()) == 0
+    runs = json.loads(capsys.readouterr().out)
+    assert [r["status"] for r in runs] == ["failed", "succeeded"]
+    assert main(["runs", "mydag"], sd=sd, journal=FakeJournal([])) == 0
+    assert capsys.readouterr().out == "no runs recorded\n"
+
+
+def test_logs_latest_and_by_prefix(sd, capsys):
+    assert main(["logs", "mydag"], sd=sd, journal=history_journal()) == 0
+    out = capsys.readouterr().out
+    assert out.startswith(f"run {'b' * 32}  failed")
+    assert "error: broken input" in out
+    for text in ["systemd: Starting mydag.service", "▶ run started", "▶ fetch started",
+                 "[fetch] fetching", "■ fetch failed: broken input", "■ run failed: broken input"]:
+        assert text in out
+    assert main(["logs", "mydag", "aaaa", "--json"], sd=sd, journal=history_journal()) == 0
+    assert json.loads(capsys.readouterr().out)["run"]["status"] == "succeeded"
+
+
+@pytest.mark.parametrize("args,message", [
+    (["logs", "mydag", "ffff"], "error: no run of mydag.service matches 'ffff'"),
+    (["logs", "mydag", "XYZ"], "error: invalid run ID 'XYZ'"),
+])
+def test_logs_errors(sd, capsys, args, message):
+    assert main(args, sd=sd, journal=history_journal()) == 1
+    assert capsys.readouterr().err.startswith(message)
+
+
+def test_runs_rejects_bad_limit(capsys):
+    with pytest.raises(SystemExit):
+        main(["runs", "mydag", "-n", "0"])
+    assert "must be at least 1" in capsys.readouterr().err
 
 
 def test_default_unit_dir_resolved_at_call_time(flow, tmp_path, sd, capsys, monkeypatch):

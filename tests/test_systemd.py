@@ -13,6 +13,7 @@ from floe.systemd import Systemd, SystemdError
     ("start", ("demo.service",), {}, ["start", "demo.service"]),
     ("start", ("demo.service",), {"wait": False}, ["start", "--no-block", "demo.service"]),
     ("stop", ("demo.service",), {}, ["stop", "demo.service"]),
+    ("reset_failed", ("demo.service",), {}, ["reset-failed", "demo.service"]),
 ])
 def test_systemctl_commands(monkeypatch, method, args, kwargs, command):
     run = Mock(return_value=subprocess.CompletedProcess([], 0, "", ""))

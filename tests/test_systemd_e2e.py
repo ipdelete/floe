@@ -27,7 +27,7 @@ def test_clean_redeploy_run_and_journal():
     def command(name, *args):
         # The real `floe` command from this environment, as a user would run it.
         result = subprocess.run(
-            [str(Path(sys.executable).parent / "floe"), name, *args, str(script)],
+            [str(Path(sys.executable).parent / "floe"), name, str(script), *args],
             capture_output=True, text=True, timeout=60,
         )
         assert result.returncode == 0, result.stdout + result.stderr
@@ -48,7 +48,8 @@ def test_clean_redeploy_run_and_journal():
     def assert_clean():
         for name in expected:
             assert not (store.path / name).exists(), f"test left {name} installed"
-            assert sd.show(name, "LoadState")["LoadState"] == "not-found"
+            state = sd.show(name, "LoadState", "ActiveState")
+            assert state == {"LoadState": "not-found", "ActiveState": "inactive"}, (name, state)
             for suffix in ("wants", "requires", "upholds"):
                 for directory in store.path.glob(f"*.{suffix}"):
                     assert not (directory / name).is_symlink()
@@ -96,6 +97,16 @@ def test_clean_redeploy_run_and_journal():
         completed = [event for event in events if event["event"] == "task_completed"]
         assert [event["task"] for event in completed] == list(workflow.order)
         assert all(event["status"] == "succeeded" for event in completed)
+
+        # History, reconstructed by floe from the same journal records.
+        runs = json.loads(command("runs", "--json", "-n", "1"))
+        assert [(run["run_id"], run["status"]) for run in runs] == [(invocation, "succeeded")]
+        assert [task["name"] for task in runs[0]["tasks"]] == list(workflow.order)
+        logs = json.loads(command("logs", invocation[:8], "--json"))
+        assert logs["run"]["run_id"] == invocation
+        kinds = [line["kind"] for line in logs["lines"]]
+        assert kinds[0] == kinds[-1] == "systemd" and "event" in kinds and "output" in kinds
+        assert "■ run succeeded" in command("logs")
     finally:
         # Clean up even if installation, execution, or a journal assertion fails,
         # and verify cleanup even if uninstall itself reports an error.
