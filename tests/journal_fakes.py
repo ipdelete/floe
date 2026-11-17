@@ -20,14 +20,19 @@ class FakeJournal:
         self.records_list = records
         self.calls = []
         self.read = 0
+        self.limits = []
 
-    def records(self, unit, *, since=None, reverse=False, invocations=None):
+    def records(self, unit, *, since=None, reverse=False, invocations=None, limit=None):
         self.calls.append((unit, since, reverse, invocations))
-        for record in (self.records_list[::-1] if reverse else self.records_list):
-            invocation = record.get("_SYSTEMD_INVOCATION_ID") or record.get("USER_INVOCATION_ID")
-            if invocations is None or invocation in invocations:
-                self.read += 1
-                yield record
+        self.limits.append(limit)
+        records = [record for record in self.records_list
+                   if invocations is None or
+                   (record.get("_SYSTEMD_INVOCATION_ID") or record.get("USER_INVOCATION_ID")) in invocations]
+        if limit is not None:
+            records = records[-limit:]
+        for record in (records[::-1] if reverse else records):
+            self.read += 1
+            yield record
 
 
 class Run:

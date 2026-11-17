@@ -360,7 +360,8 @@ class Run:
       incomplete        started, but ended without run_completed (killed,
                         timed out, crashed) or its records are missing
     `result` is systemd's unit result when it reported one (e.g. "exit-code",
-    "timeout", "signal").
+    "timeout", "signal"). `truncated` means a bounded query omitted older
+    records: tasks may be missing, and a missing start has no time or duration.
     """
 
     workflow: str
@@ -371,6 +372,7 @@ class Run:
     error: str | None = None
     tasks: tuple[TaskRun, ...] = ()
     result: str | None = None
+    truncated: bool = False
 
     @property
     def duration(self) -> timedelta | None:
@@ -385,7 +387,8 @@ class Run:
         return {"workflow": self.workflow, "run_id": self.run_id, "status": self.status,
                 "started": _iso(self.started), "finished": _iso(self.finished),
                 "duration": None if duration is None else duration.total_seconds(),
-                "error": self.error, "result": self.result, "tasks": [t.to_dict() for t in self.tasks]}
+                "error": self.error, "result": self.result, "tasks": [t.to_dict() for t in self.tasks],
+                "truncated": self.truncated}
 
 
 LogKind = Literal["event", "output", "systemd"]

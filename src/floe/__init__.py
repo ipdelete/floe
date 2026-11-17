@@ -1,6 +1,6 @@
 """Minimal local Python workflows with systemd scheduling and journald history.
 
-This package is the library every UI (the `floe` command, a future web UI)
+This package is the library every UI (the `floe` command and local web UI)
 builds on. It never prints, parses arguments, or exits: functions return the
 data types in `floe.model` or raise `FloeError` subclasses.
 """

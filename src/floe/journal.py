@@ -26,13 +26,16 @@ class Journal:
         self.base = ["journalctl", "--user"] if user else ["journalctl"]
 
     def records(self, unit: str, *, since: str | None = None, reverse: bool = False,
-                invocations: tuple[str, ...] | None = None) -> Iterator[dict]:
+                invocations: tuple[str, ...] | None = None, limit: int | None = None) -> Iterator[dict]:
         """Stream a unit's journal records as dicts, oldest first unless reverse.
 
         Records are read lazily: stopping iteration early stops journalctl.
         `since` takes any journalctl --since value ("24 hours ago", "today", ...).
         `invocations` selects both application and manager records for those IDs.
+        `limit` selects at most that many newest records (in the requested order).
         """
+        if limit is not None and (type(limit) is not int or limit < 1):
+            raise ValidationError(["record limit must be a positive integer"])
         if invocations is not None:
             if any(not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{32}", value)
                    for value in invocations):
@@ -45,6 +48,8 @@ class Journal:
             cmd.append(f"--since={since}")
         if reverse:
             cmd.append("--reverse")
+        if limit is not None:
+            cmd.append(f"--lines={limit}")
         if invocations is not None:
             cmd.extend(f"_SYSTEMD_INVOCATION_ID={value}" for value in invocations)
             cmd.append("+")  # either the process's ID or the manager's ID

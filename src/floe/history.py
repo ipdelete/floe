@@ -30,13 +30,18 @@ _RUN_ID = re.compile(r"[0-9a-f]{1,32}")
 
 
 def list_runs(workflow: str, journal: Journal, sd: Systemd, *,
-              since: str | None = None, limit: int | None = 20) -> list[Run]:
+              since: str | None = None, limit: int | None = 20,
+              max_records: int | None = None) -> list[Run]:
     """Runs newest first, with complete records for each selected invocation.
 
     `since` selects runs with journal activity in that range, not partial runs.
     Discovery streams the journal; only selected invocations' records are kept.
+    With max_records, fetch only each selected invocation's newest records and
+    mark partial runs as truncated. Candidate ordering then uses discovery
+    evidence within `since`, rather than recovering every candidate's start.
     """
     service, _ = unit_names(workflow)
+    _check_record_limit(max_records)
     if limit is not None and limit < 1:
         raise ValidationError(["limit must be at least 1"])
     invocations = _run_ids(service, journal, since=since)
@@ -44,10 +49,16 @@ def list_runs(workflow: str, journal: Journal, sd: Systemd, *,
     # filter, so discovery alone cannot reliably order them by start time.
     if since is None and limit is not None:
         invocations = invocations[:limit]
-    groups = _records_for(service, invocations, journal)
+    # Bounded reads cannot reliably recover starts outside the discovery window.
+    # Select candidates before fetching so a web request does not read every run.
+    if max_records is not None and limit is not None:
+        invocations = invocations[:limit]
+    groups = _records_for(service, invocations, journal, max_records=max_records)
     active = _active_invocation(service, sd)
-    runs = [_build_run(workflow, inv, records, inv == active) for inv, records in groups.items() if records]
-    runs.sort(key=lambda run: run.started, reverse=True)
+    runs = [_build_run(workflow, inv, records, inv == active, max_records=max_records)
+            for inv, records in groups.items() if records]
+    if max_records is None:
+        runs.sort(key=lambda run: run.started, reverse=True)
     return runs if limit is None else runs[:limit]
 
 
@@ -56,15 +67,29 @@ def get_run(workflow: str, run_id: str | None, journal: Journal, sd: Systemd) ->
     return run_logs(workflow, run_id, journal, sd).run
 
 
-def run_logs(workflow: str, run_id: str | None, journal: Journal, sd: Systemd) -> RunLogs:
-    """A run with every journal line it produced, in order."""
+def run_logs(workflow: str, run_id: str | None, journal: Journal, sd: Systemd, *,
+             max_records: int | None = None) -> RunLogs:
+    """A run and its journal lines; optionally retain only the newest records.
+
+    Bounded reads mark Run.truncated when older records were omitted. Task and
+    timing information may then be partial; missing starts have no duration.
+    """
+    _check_record_limit(max_records)
     service, _ = unit_names(workflow)
-    invocation, records = _find(service, run_id, journal)
-    run = _build_run(workflow, invocation, records, invocation == _active_invocation(service, sd))
-    return RunLogs(run, tuple(_log_lines(invocation, records)))
+    invocation, records = _find(service, run_id, journal, max_records=max_records)
+    run = _build_run(workflow, invocation, records, invocation == _active_invocation(service, sd),
+                     max_records=max_records)
+    lines = records[-max_records:] if max_records is not None else records
+    return RunLogs(run, tuple(_log_lines(invocation, lines)))
 
 
-def _find(service: str, run_id: str | None, journal: Journal) -> tuple[str, list[dict]]:
+def _check_record_limit(value: int | None) -> None:
+    if value is not None and (type(value) is not int or value < 1):
+        raise ValidationError(["max_records must be a positive integer"])
+
+
+def _find(service: str, run_id: str | None, journal: Journal, *,
+          max_records: int | None = None) -> tuple[str, list[dict]]:
     if run_id is not None and not _RUN_ID.fullmatch(run_id):
         raise ValidationError([f"invalid run ID {run_id!r}: expected up to 32 lowercase hex digits"])
     if run_id is not None and len(run_id) == 32:
@@ -75,7 +100,7 @@ def _find(service: str, run_id: str | None, journal: Journal) -> tuple[str, list
             invocations = invocations[:1]
     if len(invocations) > 1:
         raise NotFoundError(f"run ID {run_id!r} is ambiguous: matches {', '.join(sorted(invocations))}")
-    groups = _records_for(service, invocations, journal)
+    groups = _records_for(service, invocations, journal, max_records=max_records)
     if not invocations or not groups[invocations[0]]:
         raise NotFoundError(f"no runs of {service} recorded" if run_id is None
                             else f"no run of {service} matches {run_id!r}")
@@ -101,8 +126,15 @@ def _run_ids(service: str, journal: Journal, *, since: str | None = None,
     return sorted(first, key=lambda inv: started.get(inv, first[inv]), reverse=True)
 
 
-def _records_for(service: str, invocations: list[str], journal: Journal) -> dict[str, list[dict]]:
+def _records_for(service: str, invocations: list[str], journal: Journal, *,
+                 max_records: int | None = None) -> dict[str, list[dict]]:
     groups: dict[str, list[dict]] = {inv: [] for inv in invocations}
+    if max_records is not None:
+        for inv in invocations:
+            # The extra record establishes whether the result was truncated.
+            groups[inv] = list(journal.records(service, invocations=(inv,), reverse=True,
+                                                limit=max_records + 1))[::-1]
+        return groups
     if groups:
         # Avoid oversized command lines for explicitly large history requests.
         selected = tuple(invocations) if len(invocations) <= 128 else None
@@ -160,7 +192,11 @@ def _event_time(event: Event) -> datetime:
     return datetime.fromisoformat(event.timestamp).astimezone(UTC)
 
 
-def _build_run(workflow: str, invocation: str, records: list[dict], running: bool) -> Run:
+def _build_run(workflow: str, invocation: str, records: list[dict], running: bool, *,
+               max_records: int | None = None) -> Run:
+    truncated = max_records is not None and len(records) > max_records
+    if truncated:
+        records = records[-max_records:]
     tasks: dict[str, TaskRun] = {}
     started: datetime | None = None
     completed: tuple[Event, datetime] | None = None
@@ -210,9 +246,9 @@ def _build_run(workflow: str, invocation: str, records: list[dict], running: boo
         for name, task in tasks.items():
             if task.status == "running":
                 tasks[name] = replace(task, status="incomplete")
-    return Run(workflow=workflow, run_id=invocation, status=status, started=started or first,
+    return Run(workflow=workflow, run_id=invocation, status=status, started=started or (None if truncated else first),
                finished=finished, error=error, tasks=tuple(tasks.values()),
-               result=result)
+               result=result, truncated=truncated)
 
 
 def _error_output(output: list[str], result: str | None) -> str | None:

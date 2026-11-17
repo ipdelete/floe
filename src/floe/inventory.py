@@ -106,11 +106,13 @@ def check_installed(installed: InstalledWorkflow, store: UnitStore) -> list[str]
     return [f"units out of date ({', '.join(stale)}); reinstall"] if stale else []
 
 
-def overview(store: UnitStore, sd: Systemd, journal: Journal, *, verify: bool = False) -> list[WorkflowSummary]:
+def overview(store: UnitStore, sd: Systemd, journal: Journal, *, verify: bool = False,
+             since: str | None = None, max_records: int | None = None) -> list[WorkflowSummary]:
     """Installed workflows with timer state, schedule, next/last trigger, and last run.
 
     With verify, also `check_installed` each definition (runs workflow code). systemd or
     journal errors for one workflow become problems instead of failing all.
+    `since` and `max_records` bound history reads, as in list_runs.
     """
     summaries: list[WorkflowSummary] = []
     for installed in list_installed(store):
@@ -133,7 +135,7 @@ def overview(store: UnitStore, sd: Systemd, journal: Journal, *, verify: bool = 
                 next_run=_timestamp(values.get("NextElapseUSecRealtime", "")),
                 last_trigger=_timestamp(values.get("LastTriggerUSec", "")),
             )
-            runs = list_runs(installed.name, journal, sd, limit=1)
+            runs = list_runs(installed.name, journal, sd, limit=1, since=since, max_records=max_records)
             summary = replace(summary, last_run=runs[0] if runs else None)
         except FloeError as exc:
             problems.append(str(exc))

@@ -47,3 +47,8 @@ journal configuration and storage limits; logs may be rotated or lost across
 reboots without persistent journaling. The raw records are also available with
 `journalctl --user -u mydag.service` (add `-o json` for structured records, `-f`
 to follow).
+
+The [read-only dashboard](web.md), started with `floe web`, shows the same
+history with a seven-day discovery window and a newest-1,000-record limit per
+selected run. Partial history is labeled. CLI commands do not apply that
+record limit; their JSON run objects include `truncated: false`.

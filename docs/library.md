@@ -1,7 +1,7 @@
 # Architecture
 
-Floe is a library with user interfaces on top. The `floe` command is one UI; a
-web UI is planned and will use the same library.
+Floe is a library with user interfaces on top. The `floe` command and the
+read-only `floe web` dashboard use the same public library.
 
 ```
 src/floe/        library: all logic, no user I/O
@@ -16,7 +16,22 @@ src/floe/        library: all logic, no user I/O
   systemd.py     thin systemctl wrapper
   journal.py     thin journalctl wrapper
 src/floe_cli/    the `floe` command: arguments in, text and exit codes out
+src/floe_web/    localhost HTTP routing, escaped server-rendered HTML, small stylesheet
 ```
+
+The web UI never loads workflow definitions and has no write routes. See
+[Dashboard](web.md) for its query limits and local-access constraints.
+
+`list_runs(..., max_records=N)` and `run_logs(..., max_records=N)` optionally
+read only the newest N records per selected invocation (plus one to detect
+truncation). The returned `Run.truncated` flag, also present in `to_dict()`,
+marks omitted earlier records. Missing starts in a truncated run have no start
+time or duration; task history can be partial. Without `max_records`, behavior
+is unchanged. With bounded `list_runs`, candidates are selected and ordered
+using evidence in the discovery window before their limited records are
+fetched. `overview(..., since=..., max_records=...)` forwards these limits for
+each workflow's latest run. `Journal.records(..., limit=N)` applies a newest-
+record limit in journalctl itself, preserving the requested output order.
 
 The rules, enforced by `tests/test_boundaries.py`:
 

@@ -102,7 +102,24 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("run_id", nargs="?", help="run ID or unique prefix")
     p.add_argument("--json", action="store_true", help="print the run and its lines as JSON")
     p.set_defaults(handler=_logs)
+
+    p = sub.add_parser("web", help="serve the read-only dashboard on 127.0.0.1 (Ctrl-C to stop)")
+    p.add_argument("--port", type=_port, default=8080, help="local TCP port (default: 8080)")
+    p.set_defaults(handler=_web)
     return parser
+
+
+def _port(value: str) -> int:
+    number = int(value)
+    if not 1 <= number <= 65535:
+        raise argparse.ArgumentTypeError("must be between 1 and 65535")
+    return number
+
+
+def _web(args, ctx) -> int:
+    from floe_web import serve
+
+    return serve(ctx.store, ctx.sd, ctx.journal, port=args.port)
 
 
 def _add_target(parser: argparse.ArgumentParser, help_text: str) -> None:

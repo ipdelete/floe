@@ -1,5 +1,5 @@
 """Enforce the architecture: the floe library holds the logic and never talks to
-users; UIs (floe_cli, later a web UI) use only floe's public API; everything is
+users; UIs (floe_cli and floe_web) use only floe's public API; everything is
 standard library only, so systemd can run it with the system Python."""
 
 import ast
@@ -12,8 +12,8 @@ import floe
 
 SRC = Path(__file__).parents[1] / "src"
 LIBRARY = sorted((SRC / "floe").rglob("*.py"))
-UIS = sorted((SRC / "floe_cli").rglob("*.py"))
-OURS = {"floe", "floe_cli"}
+UIS = sorted(path for package in ("floe_cli", "floe_web") for path in (SRC / package).rglob("*.py"))
+OURS = {"floe", "floe_cli", "floe_web"}
 
 
 def tree(path):
@@ -51,7 +51,7 @@ def test_library_never_does_user_io(path):
                 and node.attr in ("argv", "exit", "stdout", "stderr", "stdin")):
             problems.append(f"line {node.lineno}: sys.{node.attr}")
     for name in imported_modules(tree(path)):
-        if name.split(".")[0] in ("argparse", "floe_cli", "getopt"):
+        if name.split(".")[0] in ("argparse", "floe_cli", "floe_web", "getopt"):
             problems.append(f"imports {name}")
     assert not problems
 

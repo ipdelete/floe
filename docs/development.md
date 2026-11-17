@@ -11,6 +11,11 @@ available, `systemd-analyze verify` also checks generated units without installi
 them. A test runs the exact service command with the system Python and no
 virtual environment, and `tests/test_examples.py` keeps the examples working.
 
+Web tests use temporary unit files, a fake journal and service manager, and a
+real ephemeral loopback HTTP server. They check navigation, output escaping,
+read-only behavior, bounded reads, caching, and HTTP restrictions. They do not
+contact the real user systemd session.
+
 To test against your real user systemd session and journald:
 
 ```bash

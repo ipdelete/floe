@@ -52,6 +52,19 @@ def test_invocation_filter_matches_application_or_manager_records(fake):
     ]
 
 
+def test_record_limit_is_passed_to_journalctl(fake):
+    list(Journal().records("mydag.service", limit=17, reverse=True))
+    assert "--lines=17" in fake.read_text().splitlines()
+    assert "--reverse" in fake.read_text().splitlines()
+
+
+@pytest.mark.parametrize("value", [0, -1, True, 1.5, "10"])
+def test_invalid_record_limit_does_not_start_journalctl(fake, value):
+    with pytest.raises(ValidationError, match="record limit"):
+        list(Journal().records("mydag.service", limit=value))
+    assert not fake.exists()
+
+
 def test_empty_invocation_filter_does_not_start_journalctl(fake):
     assert list(Journal().records("mydag.service", invocations=())) == []
     assert not fake.exists()
