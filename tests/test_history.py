@@ -2,7 +2,7 @@
 real captured fixtures (tests/fixtures); workflow events are synthesized."""
 
 import json
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from unittest.mock import create_autospec
 
 import pytest
@@ -277,3 +277,21 @@ def test_run_logs_lines_and_task_attribution(sd):
         ("systemd", None, "Finished mydag.service - Floe workflow mydag."),
     ]
     assert logs.to_dict()["lines"][1]["event"]["event"] == "run_started"
+
+
+def test_log_line_times_follow_the_journal_order(sd):
+    """Events carry their own timestamp, taken before the line reached journald.
+    Displaying it next to journald receive times made times go backwards."""
+    r = Run("e" * 32).starting().event("run_started").event("task_started", task="fetch")
+    r.output("fetching")
+    early = "2027-01-15T08:00:00+00:00"  # before every journal record above
+    r.event("task_completed", task="fetch", status="succeeded", timestamp=early)
+    r.event("run_completed", status="succeeded").finished()
+    logs = run_logs("mydag", None, FakeJournal(r.records), sd)
+    times = [line.timestamp for line in logs.lines]
+    assert times == sorted(times)
+    epoch = datetime(1970, 1, 1, tzinfo=UTC)
+    assert times == [epoch + timedelta(microseconds=int(record["__REALTIME_TIMESTAMP"])) for record in r.records]
+    completed = next(line for line in logs.lines if line.event and line.event.event == "task_completed")
+    assert completed.event.timestamp == early  # the event's own time is kept
+    assert logs.run.tasks[0].finished.isoformat() == early  # and still used for the run

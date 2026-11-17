@@ -240,6 +240,8 @@ def _log_lines(invocation: str, records: Iterable[dict]) -> Iterator[LogLine]:
             continue
         if event.event == "task_started":
             task = event.task
-        yield LogLine(_event_time(event), "event", message, task=event.task, priority=priority, event=event)
+        # Every line uses journald's receive time, the clock of the order lines are
+        # shown in; the event's own timestamp stays available in `event`.
+        yield LogLine(when, "event", message, task=event.task, priority=priority, event=event)
         if event.event == "task_completed":
             task = None

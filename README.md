@@ -247,8 +247,10 @@ A run's ID is its systemd invocation ID. Its status is:
   timed out, crashed), with systemd's result (such as `timeout`) when known.
 
 `floe logs` shows systemd's messages, Floe's events, and task output in order,
-with output attributed to the task that was running. Runs of `floe run` outside
-systemd are not in the journal and do not appear.
+with output attributed to the task that was running. Each line's time is when
+journald received it; in `--json`, an event line's `event` also keeps the
+event's own timestamp, which run start, finish, and durations are based on.
+Runs of `floe run` outside systemd are not in the journal and do not appear.
 
 Journald is the only execution-history store. Retention depends on the machine's
 journal configuration and storage limits; logs may be rotated or lost across
