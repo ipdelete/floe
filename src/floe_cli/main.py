@@ -3,8 +3,10 @@ into text and exit codes. No workflow or deployment logic lives here."""
 
 import argparse
 import json
+import os
 import sys
-from contextlib import redirect_stdout
+from collections.abc import Iterator
+from contextlib import contextmanager, redirect_stdout
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -146,11 +148,54 @@ def _definition(target: str, ctx, *, name: bool = False) -> Path:
 
 def _run(args, ctx) -> int:
     workflow = _load(_definition(args.target, ctx, name=args.name))
+    with _events_only_on_stdout() as events:
 
-    def emit(event: floe.Event) -> None:
-        print(json.dumps(event.to_dict()), flush=True)
+        def emit(event: floe.Event) -> None:
+            # Output a task already wrote belongs before the event that follows it.
+            sys.stdout.flush()
+            sys.stderr.flush()
+            events.write(json.dumps(event.to_dict()) + "\n")
+            events.flush()
 
-    return 0 if floe.run(workflow, emit) else 1
+        return 0 if floe.run(workflow, emit) else 1
+
+
+@contextmanager
+def _events_only_on_stdout() -> Iterator:
+    """Yield a stream for events; send everything tasks write to stdout to stderr.
+
+    Covers Python writes (sys.stdout) and child processes (file descriptor 1),
+    so task output can neither corrupt the event stream nor sit in a stdout
+    buffer until after its task has completed. Both are restored afterwards.
+    """
+    sys.stdout.flush()
+    sys.stderr.flush()
+    saved_fd = os.dup(1)
+    events, own_events = sys.stdout, None
+    try:
+        if _fileno(sys.stdout) == 1:
+            # Writes through sys.stdout would follow fd 1 to stderr; keep a copy.
+            own_events = open(saved_fd, "w", encoding=sys.stdout.encoding,
+                              errors=sys.stdout.errors, closefd=False)
+            events = own_events
+        os.dup2(2, 1)
+        with redirect_stdout(sys.stderr):
+            yield events
+    finally:
+        try:
+            sys.stderr.flush()
+            if own_events is not None:
+                own_events.close()
+        finally:
+            os.dup2(saved_fd, 1)
+            os.close(saved_fd)
+
+
+def _fileno(stream) -> int | None:
+    try:
+        return stream.fileno()
+    except (AttributeError, OSError, ValueError):  # io.UnsupportedOperation is both
+        return None
 
 
 def _install(args, ctx) -> int:

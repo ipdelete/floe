@@ -415,3 +415,87 @@ def test_service_command_runs_with_system_python_and_no_venv(flow, tmp_path):
     )
     assert r.returncode == 0, r.stderr
     assert json.loads(r.stdout.splitlines()[-1])["status"] == "succeeded"
+
+
+NOISY = '''import os, subprocess, sys
+WORKFLOW = "noisy"
+def first():
+    print("printed")
+    subprocess.run(["sh", "-c", "echo child"], check=True)
+    os.write(1, b"raw fd\\n")
+    sys.stdout.write("unterminated")
+def second():
+    print("second task")
+    if os.environ.get("NOISY_FAIL"):
+        raise RuntimeError("broken")
+tasks = {"first": first, "second": second}
+dag = {"first": set(), "second": {"first"}}
+'''
+
+
+def _run_noisy(tmp_path, *, merged: bool, fail: bool = False) -> subprocess.CompletedProcess:
+    script = tmp_path / "noisy.py"
+    script.write_text(NOISY)
+    env = {"PYTHONPATH": str(ROOT / "src"), "PATH": "/usr/bin:/bin", **({"NOISY_FAIL": "1"} if fail else {})}
+    return subprocess.run(
+        [sys.executable, "-m", "floe_cli", "run", str(script)], cwd=tmp_path, env=env, text=True,
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT if merged else subprocess.PIPE,
+    )
+
+
+@pytest.mark.parametrize("fail", [False, True])
+def test_task_stdout_cannot_corrupt_the_event_stream(tmp_path, fail):
+    """print(), sys.stdout and child processes writing to fd 1 all end up on stderr."""
+    r = _run_noisy(tmp_path, merged=False, fail=fail)
+    assert r.returncode == (1 if fail else 0), r.stderr
+    events = [json.loads(line) for line in r.stdout.splitlines()]
+    assert [e["event"] for e in events] == [
+        "run_started", "task_started", "task_completed", "task_started", "task_completed", "run_completed"]
+    assert events[-1]["status"] == ("failed" if fail else "succeeded")
+    for text in ("printed", "child", "raw fd", "unterminated", "second task"):
+        assert text in r.stderr
+
+
+def test_task_output_precedes_its_task_completed_event(tmp_path):
+    """Like journald, read both streams from one pipe: output must not be held in a
+    buffer and surface after its task has completed, where it is misattributed."""
+    r = _run_noisy(tmp_path, merged=True)
+    assert r.returncode == 0, r.stdout
+    task, owners = None, {}
+    for line in r.stdout.splitlines():
+        # A partial line is completed by whatever is written next; split it off.
+        text, brace, rest = line.partition("{")
+        if text:
+            owners[text] = task
+        if brace:
+            event = json.loads(brace + rest)
+            task = event["task"] if event["event"] == "task_started" else None
+    assert owners == {"printed": "first", "child": "first", "raw fd": "first",
+                      "unterminated": "first", "second task": "second"}
+
+
+def test_in_process_task_print_goes_to_stderr(tmp_path, capsys):
+    """When sys.stdout is not file descriptor 1 (main() called in-process), print()
+    in a task must still not reach the stream events are written to."""
+    script = tmp_path / "flow.py"
+    script.write_text("WORKFLOW = 'p'\ndef a():\n    print('from task')\ntasks = {'a': a}\ndag = {'a': set()}\n")
+    assert main(["run", str(script)]) == 0
+    out, err = capsys.readouterr()
+    assert [json.loads(line)["event"] for line in out.splitlines()] == [
+        "run_started", "task_started", "task_completed", "run_completed"]
+    assert err == "from task\n"
+
+
+@pytest.mark.parametrize("body", ["pass", "raise RuntimeError('x')", "raise KeyboardInterrupt"])
+def test_run_restores_stdout_afterwards(tmp_path, capsys, body):
+    script = tmp_path / "flow.py"
+    script.write_text(f"WORKFLOW = 'restore'\ndef a():\n    {body}\ntasks = {{'a': a}}\ndag = {{'a': set()}}\n")
+    before_stream, before_fd = sys.stdout, os.fstat(1)
+    try:
+        main(["run", str(script)])
+    except KeyboardInterrupt:
+        pass
+    assert sys.stdout is before_stream
+    after_fd = os.fstat(1)
+    assert (after_fd.st_dev, after_fd.st_ino) == (before_fd.st_dev, before_fd.st_ino)
+    assert '"run_started"' in capsys.readouterr().out

@@ -267,6 +267,32 @@ def test_install_start_and_history(workflow):
 
 # --- How runs end -----------------------------------------------------------------
 
+def test_task_stdout_is_attributed_to_its_task(workflow):
+    """print() and child processes writing to stdout land in journald as output
+    of the task that wrote them, not after it or as part of the event stream."""
+    flow = workflow('''
+        import subprocess
+
+        def first():
+            print("printed by first")
+            subprocess.run(["echo", "child of first"], check=True)
+
+        def second():
+            print("printed by second")
+
+        tasks = {"first": first, "second": second}
+        dag = {"first": set(), "second": {"first"}}
+    ''')
+    floe_command("start", flow.name)
+    sync_journal()
+    logs = floe_json("logs", flow.name)
+    assert logs["run"]["status"] == "succeeded"
+    assert [(t["name"], t["status"]) for t in logs["run"]["tasks"]] == [
+        ("first", "succeeded"), ("second", "succeeded")]
+    output = [(line["task"], line["message"]) for line in logs["lines"] if line["kind"] == "output"]
+    assert output == [("first", "printed by first"), ("first", "child of first"),
+                      ("second", "printed by second")]
+
 def test_failed_task(workflow):
     flow = workflow('''
         def ok():

@@ -68,8 +68,14 @@ need systemd tools.
 
 Tasks run one at a time. An exception stops the workflow, records failure, and
 returns a nonzero exit code. Tasks following the failure are not executed,
-including independent tasks later in the execution order. Send task messages
-to stderr so stdout remains newline-delimited JSON.
+including independent tasks later in the execution order.
+
+stdout carries only Floe's events. While tasks run, `floe run` sends anything
+they write to stdout to stderr instead, whether from `print()` or from child
+processes, and flushes Python's output before each event so that output stays
+with the task that wrote it. End output lines with a newline: under systemd,
+stdout and stderr can share one journal stream, so an unterminated line can be
+joined to the next event, which history then cannot recognize.
 
 ## Run directly
 
@@ -77,7 +83,7 @@ to stderr so stdout remains newline-delimited JSON.
 floe run examples/workflow.py
 ```
 
-Events are printed to stdout as JSON lines and task messages to stderr. Direct
+Events are printed to stdout as JSON lines and task output to stderr. Direct
 execution does not store these events in journald.
 
 Each run emits `run_started`, `task_started`, `task_completed`, and
@@ -311,7 +317,7 @@ This is opt-in and takes about 20 seconds. Each test generates its own workflow,
 named `floe-e2e-<random>`, in a temporary directory, deploys it with the real
 `floe` command, and uninstalls it afterward, verifying that no unit files,
 enable links, loaded units, or timer stamps remain. The tests cover deployment
-and idempotent reinstall, history and logs of successful, failed, invalid,
+and idempotent reinstall, task output attribution, history and logs of successful, failed, invalid,
 timed-out, running, and stopped runs, overlapping starts, schedule drift,
 missing definition files, interrupted uninstalls, foreign and masked units, and
 the timer starting runs. They execute only their own generated tasks and touch
