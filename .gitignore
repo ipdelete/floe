@@ -9,6 +9,9 @@ wheels/
 # Virtual environments
 .venv
 
+# Local Pi skills and configuration
+/.pi/
+
 # Files the examples create when run in place
 examples/checksums/state/
 examples/checksums/out/

@@ -16,6 +16,11 @@ real ephemeral loopback HTTP server. They check navigation, output escaping,
 read-only behavior, bounded reads, caching, and HTTP restrictions. They do not
 contact the real user systemd session.
 
+The packaging test uses `uv` to build a wheel offline and install it without
+dependencies into a temporary virtual environment outside the checkout. It
+checks the console entry point, isolated imports, and bundled icon geometry and
+license resources. It does not contact a package registry or service manager.
+
 To test against your real user systemd session and journald:
 
 ```bash

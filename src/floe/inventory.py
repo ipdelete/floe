@@ -13,7 +13,7 @@ from .deploy import PACKAGE_ROOT, Deployment, plan_install, unit_names
 from .history import list_runs
 from .journal import Journal
 from .loader import load
-from .model import FloeError, InstalledWorkflow, NotFoundError, WorkflowSummary
+from .model import FloeError, InstalledWorkflow, NotFoundError, UnitState, WorkflowSummary
 from .store import UnitStore
 from .systemd import Systemd
 
@@ -132,6 +132,7 @@ def overview(store: UnitStore, sd: Systemd, journal: Journal, *, verify: bool = 
                                if (m := _CALENDAR.search(value))),
                 enabled=values.get("UnitFileState") == "enabled",
                 active=values.get("ActiveState") == "active",
+                timer_state=UnitState(timer, values),
                 next_run=_timestamp(values.get("NextElapseUSecRealtime", "")),
                 last_trigger=_timestamp(values.get("LastTriggerUSec", "")),
             )

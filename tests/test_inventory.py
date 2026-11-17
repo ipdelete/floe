@@ -124,12 +124,16 @@ def test_overview(tmp_path, store, sd):
     assert summary.name == "mydag"
     assert summary.schedule == ("*-*-* *:00:00", "*-*-* 08:00:00")
     assert (summary.enabled, summary.active, summary.problems) == (True, True, ())
+    assert summary.timer_state.name == "mydag.timer"
+    assert summary.timer_state["UnitFileState"] == "enabled"
+    assert summary.timer_state["ActiveState"] == "active"
     assert summary.next_run.timestamp() == 1794855600 and summary.last_trigger is None
     assert summary.last_run.run_id == "a" * 32
     sd.show_all.assert_called_once()
     assert sd.show_all.call_args.kwargs == {"unix_timestamps": True}
     data = summary.to_dict()
     assert data["name"] == "mydag" and data["last_run"]["status"] == "succeeded"
+    assert data["timer_state"] == summary.timer_state.to_dict()
 
 
 @pytest.mark.parametrize("failure", ["systemd", "journal"])
@@ -140,6 +144,8 @@ def test_overview_reports_inactive_timer_and_errors_per_workflow(tmp_path, store
     [summary] = overview(store, sd, FakeJournal([]))
     assert summary.problems == ("timer is inactive",)
     assert summary.last_run is None and summary.next_run is None
+    assert summary.timer_state["ActiveState"] == "inactive"
+    assert summary.timer_state["UnitFileState"] == "disabled"
 
     deploy(tmp_path, store, sd, name="z-healthy")
     script.write_text(DEFINITION.format(name="mydag", schedule="daily"))
@@ -162,6 +168,12 @@ def test_overview_reports_inactive_timer_and_errors_per_workflow(tmp_path, store
     broken, healthy = summaries
     assert broken.problems[0] == "units out of date (mydag.timer); reinstall"
     assert ("no session" if failure == "systemd" else "journal unavailable") in broken.problems[1]
+    if failure == "systemd":
+        assert broken.timer_state is None
+        assert broken.to_dict()["timer_state"] is None
+    else:
+        assert broken.timer_state["ActiveState"] == "active"
+        assert broken.timer_state["UnitFileState"] == "enabled"
     assert healthy.problems == ()
     assert healthy.enabled and healthy.active
     assert healthy.schedule == ("*-*-* *:00:00", "*-*-* 08:00:00")
