@@ -9,6 +9,7 @@ are not in the journal and therefore not in history.
 import json
 import re
 from collections.abc import Iterable, Iterator
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
 from .deploy import unit_names
@@ -88,7 +89,9 @@ def _find(service: str, run_id: str | None, journal: Journal) -> tuple[str, list
 
 def _active_invocation(service: str, sd: Systemd) -> str | None:
     props = sd.show(service, "ActiveState", "InvocationID")
-    return props.get("InvocationID") or None if props.get("ActiveState") in _RUNNING else None
+    if props.get("ActiveState") not in _RUNNING:
+        return None
+    return props.get("InvocationID") or None
 
 
 # --- Record parsing ------------------------------------------------------------
@@ -133,19 +136,22 @@ def _event_time(event: Event, fallback: datetime) -> datetime:
 
 
 def _build_run(workflow: str, invocation: str, records: list[dict], running: bool) -> Run:
-    tasks: dict[str, dict] = {}
-    started = completed = None
+    tasks: dict[str, TaskRun] = {}
+    started: datetime | None = None
+    completed: tuple[Event, datetime] | None = None
     output: list[str] = []
-    terminal_time = result = None
+    terminal_time: datetime | None = None
+    result: str | None = None
     failed = False
     for record in records:
         if _from_systemd(record):
             if record.get("MESSAGE_ID") in _TERMINAL:
                 terminal_time = _time(record)
             result = record.get("UNIT_RESULT") or result
-            failed |= (record.get("MESSAGE_ID") in (_JOB_FAILED, _UNIT_FAILED)
-                       or record.get("JOB_RESULT") == "failed"
-                       or record.get("UNIT_RESULT") not in (None, "", "success"))
+            if (record.get("MESSAGE_ID") in (_JOB_FAILED, _UNIT_FAILED)
+                    or record.get("JOB_RESULT") == "failed"
+                    or record.get("UNIT_RESULT") not in (None, "", "success")):
+                failed = True
             continue
         event = _event(record, invocation)
         if event is None:
@@ -155,10 +161,10 @@ def _build_run(workflow: str, invocation: str, records: list[dict], running: boo
         if event.event == "run_started":
             started = when
         elif event.event == "task_started" and event.task:
-            tasks[event.task] = {"name": event.task, "status": "running", "started": when}
+            tasks[event.task] = TaskRun(event.task, "running", started=when)
         elif event.event == "task_completed" and event.task:
-            task = tasks.setdefault(event.task, {"name": event.task})
-            task.update(status=event.status or "failed", finished=when, error=event.error)
+            task = tasks.get(event.task) or TaskRun(event.task, "failed")
+            tasks[event.task] = replace(task, status=event.status or "failed", finished=when, error=event.error)
         elif event.event == "run_completed":
             completed = (event, when)
 
@@ -176,11 +182,11 @@ def _build_run(workflow: str, invocation: str, records: list[dict], running: boo
     else:
         status, finished, error = "incomplete", terminal_time, "no completion recorded"
     if status != "running":
-        for task in tasks.values():
-            if task["status"] == "running":
-                task["status"] = "incomplete"
+        for name, task in tasks.items():
+            if task.status == "running":
+                tasks[name] = replace(task, status="incomplete")
     return Run(workflow=workflow, run_id=invocation, status=status, started=started or first,
-               finished=finished, error=error, tasks=tuple(TaskRun(**task) for task in tasks.values()),
+               finished=finished, error=error, tasks=tuple(tasks.values()),
                result=result)
 
 

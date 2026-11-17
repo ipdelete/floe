@@ -21,6 +21,18 @@ def test_valid_workflow_is_frozen_and_ordered():
     assert workflow.to_dict()["order"] == ["a", "b"]
 
 
+@pytest.mark.parametrize("schedule_type", [list, tuple, iter])
+def test_schedule_is_snapshotted_without_consuming_it_twice(schedule_type):
+    workflow = Workflow("demo", {}, {}, schedule_type(["hourly", "daily"]))
+    assert workflow.schedule == ("hourly", "daily")
+
+
+def test_prerequisite_iterators_are_normalized_once():
+    workflow = Workflow("demo", {"a": noop, "b": noop}, {"a": iter(["b"]), "b": set()})
+    assert workflow.dag == {"a": frozenset({"b"}), "b": frozenset()}
+    assert workflow.order == ("b", "a")
+
+
 @pytest.mark.parametrize("tasks,dag,expected", [
     ({"a": noop, "b": noop}, {"b": {"a"}}, ["missing from dag: 'a'"]),
     ({"a": noop}, {"a": set(), "x": set()}, ["without a task: 'x'"]),
@@ -35,6 +47,7 @@ def test_valid_workflow_is_frozen_and_ordered():
     ({"a": noop}, {"a": [set()]}, ["nonempty strings"]),
     ({"a": noop}, {"a": [123, ""]}, ["nonempty strings"]),
     ("tasks", {}, ["tasks must be a mapping"]),
+    ({"a": noop}, [], ["dag must be a mapping"]),
 ])
 def test_invalid_graphs(tasks, dag, expected):
     with pytest.raises(ValidationError) as caught:
@@ -62,6 +75,14 @@ def test_invalid_names(name):
 def test_invalid_schedules(schedule):
     with pytest.raises(ValidationError, match="schedule"):
         Workflow("demo", {}, {}, schedule)
+
+
+def test_invalid_schedule_iterator_reports_all_errors():
+    with pytest.raises(ValidationError) as caught:
+        Workflow("bad/name", {"a": None}, {"a": set()}, iter(["hourly", None]))
+    problems = " | ".join(caught.value.problems)
+    for text in ("workflow name", "not callable", "invalid schedule entry None"):
+        assert text in problems
 
 
 def test_event_dict_is_stable_schema():

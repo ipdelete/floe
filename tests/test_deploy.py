@@ -128,6 +128,13 @@ def test_deployment_for_workflow(dep, tmp_path):
         Deployment.for_workflow(Workflow("demo", {}, {}, source=dep.script))
 
 
+@pytest.mark.parametrize("schedule_type", [list, tuple, iter])
+def test_deployment_schedule_is_normalized_once(dep, schedule_type):
+    deployment = Deployment("demo", dep.script, schedule_type(["hourly", "daily"]))
+    assert deployment.schedule == ("hourly", "daily")
+    assert "OnCalendar=hourly\nOnCalendar=daily\n" in deployment.render_units()["demo.timer"]
+
+
 def test_start_and_status_use_unit_names(sd):
     start("mydag", sd)
     sd.start.assert_called_once_with("mydag.service", wait=True)

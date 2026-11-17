@@ -19,6 +19,19 @@ def test_load_definition(tmp_path):
     assert workflow.order == ("a",)
 
 
+def test_loaded_workflow_normalizes_iterator_definitions(tmp_path):
+    path = tmp_path / "flow.py"
+    path.write_text(
+        'WORKFLOW = "demo"\nSCHEDULE = iter(["hourly", "daily"])\n'
+        'tasks = {"a": lambda: "a", "b": lambda: "b"}\n'
+        'dag = {"a": iter(["b"]), "b": set()}\n'
+    )
+    workflow = load(path)
+    assert workflow.schedule == ("hourly", "daily")
+    assert workflow.order == ("b", "a")
+    assert [workflow.tasks[name]() for name in workflow.order] == ["b", "a"]
+
+
 def test_schedule_optional_and_main_block_not_run(tmp_path):
     path = tmp_path / "flow.py"
     path.write_text('WORKFLOW = "demo"\ntasks = {}\ndag = {}\n'

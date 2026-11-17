@@ -279,6 +279,23 @@ def test_list_problems_and_check_exit_code(flow, store, sd, capsys):
     assert data["name"] == "mydag" and data["script"] == str(flow) and data["enabled"] is True
 
 
+def test_list_aligns_multiple_workflows_and_keeps_problems_with_their_row(flow, store, sd, capsys):
+    other = flow.with_name("other.py")
+    other.write_text(flow.read_text().replace('WORKFLOW = "mydag"', 'WORKFLOW = "z-longer-name"'))
+    for script in (flow, other):
+        assert main(["install", str(script)], store=store, sd=list_sd(sd)) == 0
+    flow.write_text(flow.read_text().replace('"hourly"', '"daily"'))
+    other.unlink()
+    capsys.readouterr()
+
+    assert main(["list", "--check"], store=store, sd=sd, journal=FakeJournal([])) == 1
+    header, first, first_problem, second, second_problem = capsys.readouterr().out.splitlines()
+    assert first.startswith("mydag ") and second.startswith("z-longer-name ")
+    assert first.index("*-*-*") == second.index("*-*-*") == header.index("SCHEDULE")
+    assert first_problem == "  ! units out of date (mydag.timer); reinstall"
+    assert second_problem == f"  ! script not found: {other}"
+
+
 def test_run_and_reinstall_by_name(flow, store, sd, capsys):
     main(["install", str(flow)], store=store, sd=sd)
     flow.write_text(flow.read_text().replace('"hourly"', '"daily"'))

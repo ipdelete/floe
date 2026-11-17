@@ -6,18 +6,24 @@ optionally, SCHEDULE. Loading executes the file, like importing a module.
 
 import runpy
 import sys
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
-from dataclasses import replace
 from functools import wraps
 from importlib.machinery import all_suffixes
 from pathlib import Path
+from types import ModuleType
 
 from .model import LoadError, Workflow
 
 __all__ = ["load"]
 
 
-class _Imports:
+def _sibling_modules(roots: set[str]) -> dict[str, ModuleType]:
+    return {name: module for name, module in sys.modules.copy().items()
+            if name.partition(".")[0] in roots}
+
+
+class _WorkflowImports:
     """A workflow's sibling-module cache, active only while its code runs.
 
     Import state is process-global: loading/running workflows must be serial,
@@ -26,11 +32,10 @@ class _Imports:
 
     def __init__(self, directory: Path):
         self.directory = directory
-        self.modules = {}
+        self.modules: dict[str, ModuleType] = {}
 
-    @contextmanager
-    def active(self):
-        # Include packages (also namespace packages), source and extension modules.
+    def _module_roots(self) -> set[str]:
+        """Include cached modules, packages (also namespaces), and extensions."""
         roots = {name.partition(".")[0] for name in self.modules}
         for entry in self.directory.iterdir():
             if entry.is_dir() and entry.name.isidentifier():
@@ -40,13 +45,12 @@ class _Imports:
                     if entry.name.endswith(suffix):
                         roots.add(entry.name[:-len(suffix)])
                         break
-        roots.difference_update(sys.builtin_module_names)
+        return roots.difference(sys.builtin_module_names)
 
-        def local_modules():
-            return {name: module for name, module in sys.modules.copy().items()
-                    if name.partition(".")[0] in roots}
-
-        previous = local_modules()
+    @contextmanager
+    def active(self) -> Iterator[None]:
+        roots = self._module_roots()
+        previous = _sibling_modules(roots)
         previous_path = list(sys.path)
         for name in previous:
             del sys.modules[name]
@@ -55,13 +59,13 @@ class _Imports:
         try:
             yield
         finally:
-            self.modules = local_modules()
+            self.modules = _sibling_modules(roots)
             for name in self.modules:
                 del sys.modules[name]
             sys.modules.update(previous)
             sys.path[:] = previous_path
 
-    def wrap(self, task):
+    def wrap(self, task: Callable[..., object]) -> Callable[..., object]:
         @wraps(task)
         def invoke(*args, **kwargs):
             with self.active():
@@ -79,7 +83,7 @@ def load(path: str | Path) -> Workflow:
     path = Path(path).resolve()
     if not path.is_file():
         raise LoadError(f"workflow file not found: {path}")
-    imports = _Imports(path.parent)
+    imports = _WorkflowImports(path.parent)
     try:
         with imports.active():
             namespace = runpy.run_path(str(path), run_name="floe_workflow")
@@ -88,11 +92,14 @@ def load(path: str | Path) -> Workflow:
     missing = [key for key in ("WORKFLOW", "tasks", "dag") if key not in namespace]
     if missing:
         raise LoadError(f"{path}: missing {', '.join(missing)}")
-    workflow = Workflow(
+    tasks = namespace["tasks"]
+    if isinstance(tasks, Mapping):
+        # Leave invalid values intact so Workflow can aggregate their errors.
+        tasks = {name: imports.wrap(task) if callable(task) else task for name, task in tasks.items()}
+    return Workflow(
         name=namespace["WORKFLOW"],
-        tasks=namespace["tasks"],
+        tasks=tasks,
         dag=namespace["dag"],
         schedule=namespace.get("SCHEDULE", ()),
         source=path,
     )
-    return replace(workflow, tasks={name: imports.wrap(task) for name, task in workflow.tasks.items()})

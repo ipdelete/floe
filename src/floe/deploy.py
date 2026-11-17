@@ -19,7 +19,7 @@ from .model import (
     ValidationError,
     Workflow,
     check_name,
-    schedule_problems,
+    normalize_schedule,
 )
 from .render import render_service, render_timer
 from .store import UnitStore
@@ -69,9 +69,9 @@ class Deployment:
 
     def __post_init__(self) -> None:
         check_name(self.workflow)
-        if problems := schedule_problems(self.schedule):
+        schedule, problems = normalize_schedule(self.schedule)
+        if problems:
             raise ValidationError(problems)
-        schedule = tuple(self.schedule)
         if not schedule:
             raise ValidationError(["schedule must contain at least one OnCalendar expression"])
         object.__setattr__(self, "schedule", schedule)
@@ -139,7 +139,10 @@ def apply(plan: InstallPlan, store: UnitStore, sd: Systemd) -> list[str]:
     """
     if plan.conflicts:
         raise NotOwnedError("; ".join(f"{c.path}: {c.reason}" for c in plan.conflicts))
-    changed = [c.name for c in plan.writes if store.write(c.name, c.text, adopt=c.action == "adopt")]
+    changed = []
+    for change in plan.writes:
+        if store.write(change.name, change.text, adopt=change.action == "adopt"):
+            changed.append(change.name)
     if changed:
         sd.daemon_reload()
     sd.enable(plan.timer, now=True)
@@ -152,6 +155,63 @@ def install(dep: Deployment, store: UnitStore, sd: Systemd, *, adopt: bool = Fal
 
 
 _RUNNING = ("active", "activating", "deactivating", "reloading", "refreshing")
+
+
+def _classify_uninstall(names: tuple[str, str], store: UnitStore, sd: Systemd,
+                        errors: list[str]) -> tuple[set[str], set[str], set[str]]:
+    """Return owned files, present files, and units that are safe to stop."""
+    owned_files = {name for name in names if store.is_owned(name)}
+    present_files = {name for name in names
+                     if (store.path / name).exists() or (store.path / name).is_symlink()}
+    safe_to_stop: set[str] = set()
+    for name in names:
+        if name in present_files and name not in owned_files:
+            continue
+        try:
+            props = sd.show(name, "LoadState", "FragmentPath")
+        except (OSError, SystemdError) as exc:
+            errors.append(str(exc))
+            continue  # unknown ownership: remove our files, but do not stop a unit
+        fragment = props.get("FragmentPath", "")
+        if store.owns_path(name, fragment) or (
+            not fragment and props.get("LoadState") == "not-found" and name in owned_files
+        ):
+            safe_to_stop.add(name)
+    return owned_files, present_files, safe_to_stop
+
+
+def _owned_unit_state(name: str, store: UnitStore, sd: Systemd,
+                      errors: list[str]) -> dict[str, str] | None:
+    try:
+        props = sd.show(name, "LoadState", "ActiveState", "FragmentPath")
+    except (OSError, SystemdError) as exc:
+        errors.append(str(exc))
+        return None
+    fragment = props.get("FragmentPath", "")
+    # Only judge a unit that is (or was) ours, not a same-named one elsewhere.
+    if fragment and not store.owns_path(name, fragment):
+        return None
+    return props
+
+
+def _verify_unloaded(names: list[str], store: UnitStore, sd: Systemd, errors: list[str]) -> None:
+    # A failed unit lingers in memory after removal until its state is reset.
+    for name in names:
+        props = _owned_unit_state(name, store, sd, errors)
+        if props is not None and props.get("ActiveState") == "failed":
+            try:
+                sd.reset_failed(name)
+            except (OSError, SystemdError) as exc:
+                errors.append(str(exc))
+
+    for name in names:
+        props = _owned_unit_state(name, store, sd, errors)
+        if props is None:
+            continue
+        if props.get("LoadState") != "not-found":
+            errors.append(f"{name} is still loaded from {props.get('FragmentPath')}")
+        elif props.get("ActiveState") in (*_RUNNING, "failed"):
+            errors.append(f"{name} is still {props['ActiveState']}")
 
 
 def uninstall(workflow: str, store: UnitStore, sd: Systemd) -> list[str]:
@@ -175,35 +235,20 @@ def uninstall(workflow: str, store: UnitStore, sd: Systemd) -> list[str]:
             errors.append(str(exc))
             return False
 
-    owned = {name for name in names if store.is_owned(name)}
-    present = {name for name in names if (store.path / name).exists() or (store.path / name).is_symlink()}
-    managed = set()
-    for name in names:
-        if name in present and name not in owned:
-            continue
-        try:
-            props = sd.show(name, "LoadState", "FragmentPath")
-        except (OSError, SystemdError) as exc:
-            errors.append(str(exc))
-            continue  # unknown ownership: remove our files, but do not stop a unit
-        fragment = props.get("FragmentPath", "")
-        if store.owns_path(name, fragment) or (
-            not fragment and props.get("LoadState") == "not-found" and name in owned
-        ):
-            managed.add(name)
-    ours = [name for name in names if name in owned or name in managed]
+    owned_files, present_files, safe_to_stop = _classify_uninstall(names, store, sd, errors)
+    units_to_verify = [name for name in names if name in owned_files or name in safe_to_stop]
 
     # Stop new activations first, then the current run. An owned file alone
     # must not authorize stopping a same-named fragment loaded from elsewhere.
-    if timer in managed:
-        if timer in owned:
+    if timer in safe_to_stop:
+        if timer in owned_files:
             if not attempt(sd.disable, timer, now=True):
                 attempt(sd.stop, timer, missing_ok=True)
         else:
             attempt(sd.stop, timer, missing_ok=True)
-    if service in managed:
+    if service in safe_to_stop:
         attempt(sd.stop, service, missing_ok=True)
-    if timer in managed:
+    if timer in safe_to_stop:
         # Forget when it last fired: otherwise a later install with
         # Persistent=true runs the workflow at once to "catch up".
         attempt(sd.clean_state, timer)
@@ -212,43 +257,15 @@ def uninstall(workflow: str, store: UnitStore, sd: Systemd) -> list[str]:
     # runs, and systemd keeps managing a running process until it exits.
     removed = []
     for name in names:
-        if name in owned:
+        if name in owned_files:
             if attempt(store.remove, name):
                 removed.append(name)
-        elif name not in present:
+        elif name not in present_files:
             attempt(store.remove_links, name)  # dangling links from an interrupted run
 
-    if not ours:
-        if errors:
-            raise UninstallError(removed, errors)
-        return removed
-    attempt(sd.daemon_reload)
-
-    def state(name: str) -> dict[str, str] | None:
-        try:
-            props = sd.show(name, "LoadState", "ActiveState", "FragmentPath")
-        except (OSError, SystemdError) as exc:
-            errors.append(str(exc))
-            return None
-        fragment = props.get("FragmentPath", "")
-        # Only judge a unit that is (or was) ours, not a same-named one elsewhere.
-        return props if not fragment or store.owns_path(name, fragment) else None
-
-    for name in ours:
-        # A unit whose last run failed stays in memory, even with its file gone,
-        # until its failed state is reset.
-        props = state(name)
-        if props is not None and props.get("ActiveState") == "failed":
-            attempt(sd.reset_failed, name)
-
-    for name in ours:
-        props = state(name)
-        if props is None:
-            continue
-        if props.get("LoadState") != "not-found":
-            errors.append(f"{name} is still loaded from {props.get('FragmentPath')}")
-        elif props.get("ActiveState") in (*_RUNNING, "failed"):
-            errors.append(f"{name} is still {props['ActiveState']}")
+    if units_to_verify:
+        attempt(sd.daemon_reload)
+        _verify_unloaded(units_to_verify, store, sd, errors)
     if errors:
         raise UninstallError(removed, errors)
     return removed

@@ -186,7 +186,8 @@ def _list(args, ctx) -> int:
     elif not summaries:
         print("no workflows installed")
     else:
-        rows = [("NAME", "SCHEDULE", "TIMER", "NEXT", "LAST RUN", "SCRIPT")]
+        header = ("NAME", "SCHEDULE", "TIMER", "NEXT", "LAST RUN", "SCRIPT")
+        rows = []
         for summary in summaries:
             last = summary.last_run
             rows.append((
@@ -197,10 +198,11 @@ def _list(args, ctx) -> int:
                 "-" if last is None else f"{_local(last.started)} {last.status}",
                 _home(summary.workflow.script),
             ))
-        widths = [max(len(row[i]) for row in rows) for i in range(len(rows[0]) - 1)]
-        for row, summary in zip(rows, [None, *summaries]):
-            print(("  ".join(cell.ljust(width) for cell, width in zip(row, widths)) + "  " + row[-1]).rstrip())
-            for problem in summary.problems if summary else ():
+        heading, *lines = _format_table(header, rows)
+        print(heading)
+        for summary, line in zip(summaries, lines, strict=True):
+            print(line)
+            for problem in summary.problems:
                 print(f"  ! {problem}")
     return 1 if args.check and any(summary.problems for summary in summaries) else 0
 
@@ -220,12 +222,11 @@ def _runs(args, ctx) -> int:
     if not runs:
         print("no runs recorded")
         return 0
-    rows = [("RUN", "STARTED", "STATUS", "DURATION", "DETAIL")]
-    for run in runs:
-        rows.append((run.run_id[:8], _local(run.started), run.status, _duration(run.duration), _detail(run)))
-    widths = [max(len(row[i]) for row in rows) for i in range(4)]
-    for row in rows:
-        print(("  ".join(cell.ljust(width) for cell, width in zip(row[:4], widths)) + "  " + row[4]).rstrip())
+    header = ("RUN", "STARTED", "STATUS", "DURATION", "DETAIL")
+    rows = [(run.run_id[:8], _local(run.started), run.status, _duration(run.duration), _detail(run))
+            for run in runs]
+    for line in _format_table(header, rows):
+        print(line)
     return 0
 
 
@@ -268,6 +269,17 @@ def _describe(line: floe.LogLine) -> str:
     if event.event == "task_started":
         return f"▶ {event.task} started"
     return f"■ {event.task} {event.status}" + (f": {event.error}" if event.error else "")
+
+
+def _format_table(header: tuple[str, ...], rows: list[tuple[str, ...]]) -> list[str]:
+    """Align all but the last column, including the header in column widths."""
+    all_rows = [header, *rows]
+    widths = [max(len(row[column]) for row in all_rows) for column in range(len(header) - 1)]
+    return [
+        ("  ".join(cell.ljust(width) for cell, width in zip(row[:-1], widths, strict=True))
+         + "  " + row[-1]).rstrip()
+        for row in all_rows
+    ]
 
 
 def _local(value: datetime | None) -> str:

@@ -82,15 +82,39 @@ def check_name(name: object) -> str:
     return name  # type: ignore[return-value]
 
 
-def schedule_problems(schedule: object) -> list[str]:
+def normalize_schedule(schedule: object) -> tuple[tuple[str, ...], list[str]]:
+    """Snapshot valid expressions in one pass, collecting all invalid entries."""
     if isinstance(schedule, str) or not isinstance(schedule, Iterable):
-        return ["schedule must be a sequence of OnCalendar expressions, not a single string"]
-    return [
-        f"invalid schedule entry {value!r}"
-        for value in schedule
-        if not isinstance(value, str) or not value or _CONTROL.search(value)
-        or value != value.strip() or value.endswith("\\")
-    ]
+        return (), ["schedule must be a sequence of OnCalendar expressions, not a single string"]
+    values: list[str] = []
+    problems: list[str] = []
+    for value in schedule:
+        if (not isinstance(value, str) or not value or _CONTROL.search(value)
+                or value != value.strip() or value.endswith("\\")):
+            problems.append(f"invalid schedule entry {value!r}")
+        else:
+            values.append(value)
+    return tuple(values), problems
+
+
+def _normalize_dag(dag: object) -> tuple[dict[str, frozenset[str]] | None, list[str]]:
+    """Snapshot prerequisites without trying to hash invalid task names."""
+    if not isinstance(dag, Mapping):
+        return None, ["dag must be a mapping of task names to prerequisite sets"]
+    normalized: dict[str, frozenset[str]] = {}
+    problems: list[str] = []
+    for name, deps in dict(dag).items():
+        valid: set[str] = set()
+        if isinstance(deps, str) or not isinstance(deps, Iterable):
+            problems.append(f"prerequisites of {name!r} must be a set of task names")
+        else:
+            for dep in deps:
+                if not isinstance(dep, str) or not dep:
+                    problems.append(f"prerequisites of {name!r} must be nonempty strings: {dep!r}")
+                else:
+                    valid.add(dep)
+        normalized[name] = frozenset(valid)
+    return normalized, problems
 
 
 # --- Workflow ---------------------------------------------------------------
@@ -111,24 +135,15 @@ class Workflow:
     order: tuple[str, ...] = field(init=False)
 
     def __post_init__(self) -> None:
-        problems = name_problems(self.name) + schedule_problems(self.schedule)
+        schedule, schedule_errors = normalize_schedule(self.schedule)
         tasks = dict(self.tasks) if isinstance(self.tasks, Mapping) else None
-        dag = dict(self.dag) if isinstance(self.dag, Mapping) else None
+        dag, dag_errors = _normalize_dag(self.dag)
+        problems = name_problems(self.name) + schedule_errors
         if tasks is None:
             problems.append("tasks must be a mapping of names to callables")
-        if dag is None:
-            problems.append("dag must be a mapping of task names to prerequisite sets")
+        problems += dag_errors
         order: tuple[str, ...] = ()
         if tasks is not None and dag is not None:
-            for name, deps in dag.items():
-                if isinstance(deps, Iterable) and not isinstance(deps, str):
-                    valid = set()
-                    for dep in deps:
-                        if not isinstance(dep, str) or not dep:
-                            problems.append(f"prerequisites of {name!r} must be nonempty strings: {dep!r}")
-                        else:
-                            valid.add(dep)
-                    dag[name] = frozenset(valid)
             problems += _graph_problems(tasks, dag)
             if not problems:
                 try:
@@ -139,7 +154,7 @@ class Workflow:
             raise ValidationError(problems, subject="workflow")
         object.__setattr__(self, "tasks", MappingProxyType(tasks))
         object.__setattr__(self, "dag", MappingProxyType(dag))
-        object.__setattr__(self, "schedule", tuple(self.schedule))
+        object.__setattr__(self, "schedule", schedule)
         object.__setattr__(self, "source", None if self.source is None else Path(self.source))
         object.__setattr__(self, "order", order)
 
@@ -153,26 +168,22 @@ class Workflow:
         }
 
 
-def _graph_problems(tasks: dict, dag: dict) -> list[str]:
+def _graph_problems(tasks: dict, dag: dict[str, frozenset[str]]) -> list[str]:
     problems = []
     for name, task in tasks.items():
         if not isinstance(name, str) or not name:
             problems.append(f"task names must be nonempty strings: {name!r}")
         elif not callable(task):
             problems.append(f"task {name!r} is not callable")
-    for name, deps in dag.items():
-        if not isinstance(deps, frozenset):
-            problems.append(f"prerequisites of {name!r} must be a set of task names")
     missing = sorted(map(repr, tasks.keys() - dag.keys()))
     extra = sorted(map(repr, dag.keys() - tasks.keys()))
     if missing:
         problems.append(f"tasks missing from dag: {', '.join(missing)}")
     if extra:
         problems.append(f"dag entries without a task: {', '.join(extra)}")
-    unknown = set()
+    unknown: set[str] = set()
     for deps in dag.values():
-        if isinstance(deps, frozenset):
-            unknown |= deps - tasks.keys()
+        unknown.update(deps - tasks.keys())
     if unknown:
         problems.append(f"unknown prerequisites: {', '.join(sorted(map(repr, unknown)))}")
     return problems

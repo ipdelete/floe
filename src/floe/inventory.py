@@ -5,6 +5,7 @@ its definition file, and the floe source directory the service uses.
 """
 
 import re
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -22,31 +23,42 @@ _CALENDAR = re.compile(r"\{ OnCalendar=(.*?) ; next_elapse=")
 _TIMER_PROPS = ("UnitFileState", "ActiveState", "TimersCalendar", "NextElapseUSecRealtime", "LastTriggerUSec")
 
 
+@dataclass
+class _UnitPair:
+    service: Path | None = None
+    timer: Path | None = None
+    metadata: dict[str, dict[str, str]] = field(default_factory=dict)
+    problems: list[str] = field(default_factory=list)
+
+
 def list_installed(store: UnitStore, *, package_root: Path = PACKAGE_ROOT) -> list[InstalledWorkflow]:
     """Every workflow with at least one floe-owned unit file, sorted by name.
     Reads only unit files; never runs workflow code or calls systemd."""
-    found: dict[str, dict] = {}
+    found: dict[str, _UnitPair] = {}
     for unit in store.units():
         meta = store.metadata(unit)
         if meta.get("Owner") != "floe":
             continue
         stem, kind = unit.rsplit(".", 1)
-        entry = found.setdefault(meta.get("Workflow") or stem, {"meta": {}, "problems": []})
+        entry = found.setdefault(meta.get("Workflow") or stem, _UnitPair())
         if meta.get("Workflow") != stem:
-            entry["problems"].append(f"{unit} records workflow {meta.get('Workflow')!r}")
-        entry[kind] = store.path / unit
-        entry["meta"][kind] = meta
+            entry.problems.append(f"{unit} records workflow {meta.get('Workflow')!r}")
+        if kind == "service":
+            entry.service = store.path / unit
+        else:
+            entry.timer = store.path / unit
+        entry.metadata[kind] = meta
     return [_installed(name, entry, package_root) for name, entry in sorted(found.items())]
 
 
-def _installed(name: str, entry: dict, package_root: Path) -> InstalledWorkflow:
-    problems = entry["problems"]
-    service, timer = entry.get("service"), entry.get("timer")
+def _installed(name: str, entry: _UnitPair, package_root: Path) -> InstalledWorkflow:
+    problems = list(entry.problems)
+    service, timer = entry.service, entry.timer
     for kind, path in (("service", service), ("timer", timer)):
         if path is None:
             problems.append(f"{kind} unit is missing; reinstall")
-    scripts = {meta.get("Script") for meta in entry["meta"].values()}
-    roots = {meta.get("Floe") for meta in entry["meta"].values()}
+    scripts = {meta.get("Script") for meta in entry.metadata.values()}
+    roots = {meta.get("Floe") for meta in entry.metadata.values()}
     script = None
     if None in scripts or None in roots:
         problems.append("installed by an older floe version; reinstall from its definition file")
@@ -97,31 +109,32 @@ def overview(store: UnitStore, sd: Systemd, journal: Journal, *, verify: bool = 
     With verify, also `check_installed` each definition (runs workflow code). systemd or
     journal errors for one workflow become problems instead of failing all.
     """
-    summaries = []
+    summaries: list[WorkflowSummary] = []
     for installed in list_installed(store):
         problems = list(installed.problems)
         if verify:
             problems += check_installed(installed, store)
         _, timer = unit_names(installed.name)
-        state: dict = {}
+        summary = WorkflowSummary(installed)
         try:
             props = sd.show_all(timer, *_TIMER_PROPS, unix_timestamps=True)
             values = dict(props)
             if values.get("ActiveState") != "active" and installed.timer is not None:
                 problems.append(f"timer is {values.get('ActiveState') or 'not loaded'}")
-            state = {
-                "schedule": tuple(m.group(1) for key, value in props if key == "TimersCalendar"
-                                  if (m := _CALENDAR.search(value))),
-                "enabled": values.get("UnitFileState") == "enabled",
-                "active": values.get("ActiveState") == "active",
-                "next_run": _timestamp(values.get("NextElapseUSecRealtime", "")),
-                "last_trigger": _timestamp(values.get("LastTriggerUSec", "")),
-            }
+            summary = replace(
+                summary,
+                schedule=tuple(m.group(1) for key, value in props if key == "TimersCalendar"
+                               if (m := _CALENDAR.search(value))),
+                enabled=values.get("UnitFileState") == "enabled",
+                active=values.get("ActiveState") == "active",
+                next_run=_timestamp(values.get("NextElapseUSecRealtime", "")),
+                last_trigger=_timestamp(values.get("LastTriggerUSec", "")),
+            )
             runs = list_runs(installed.name, journal, sd, limit=1)
-            state["last_run"] = runs[0] if runs else None
+            summary = replace(summary, last_run=runs[0] if runs else None)
         except FloeError as exc:
             problems.append(str(exc))
-        summaries.append(WorkflowSummary(installed, **state, problems=tuple(problems)))
+        summaries.append(replace(summary, problems=tuple(problems)))
     return summaries
 
 

@@ -41,6 +41,21 @@ def test_task_failure(sd):
     assert run.failed_task.name == "fetch" and run.failed_task.error == "broken input"
 
 
+@pytest.mark.parametrize("status,error", [("succeeded", None), ("failed", "broken input")])
+def test_task_completion_without_start_preserves_recorded_fields(sd, status, error):
+    r = Run("a" * 32).event("task_completed", task="fetch", status=status, error=error)
+    r.event("run_completed", status=status, error=error)
+    if status == "failed":
+        r.failed()
+    else:
+        r.finished()
+    [run] = list_runs("mydag", FakeJournal(r.records), sd)
+    [task] = run.tasks
+    assert (run.status, task.name, task.status, task.error) == (status, "fetch", status, error)
+    assert task.started is None and task.duration is None
+    assert task.finished is not None
+
+
 def test_timeout_is_incomplete_with_systemd_result(sd):
     real = fixture("journal-probe-timeout.jsonl")  # started, output, timed out, killed
     invocation = real[0]["USER_INVOCATION_ID"]
