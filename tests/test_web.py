@@ -2,6 +2,7 @@
 
 import http.client
 import threading
+import time
 from html.parser import HTMLParser
 from unittest.mock import create_autospec
 
@@ -11,6 +12,17 @@ from journal_fakes import FakeJournal, Run
 import floe
 from floe_cli.main import main
 from floe_web.server import Application, Server, serve
+
+
+@pytest.fixture(autouse=True)
+def utc_timezone(monkeypatch):
+    try:
+        with monkeypatch.context() as environment:
+            environment.setenv("TZ", "UTC")
+            time.tzset()
+            yield
+    finally:
+        time.tzset()
 
 
 @pytest.fixture
@@ -60,8 +72,9 @@ def test_three_pages_and_links_are_read_only_metadata(app, monkeypatch):
         monkeypatch.setattr(floe, name, forbidden)
     home = html(app.response("/"))
     assert "mydag" in home and "other.py" in home and "Succeeded" in home
-    assert "2027-01-15 08:00:00" in home  # @1800000000, displayed in UTC
-    assert "All times UTC" in home
+    assert "2027-01-15 08:00:00" in home  # @1800000000 in this test's server timezone
+    assert "Times: UTC (UTC+00:00) (server local)" in home
+    assert "Timer: active · enabled" in home
     assert "/workflows/mydag" in Links(home).links
     assert "/workflows/other.py" in Links(home).links
     workflow = html(app.response("/workflows/other.py"))
@@ -70,6 +83,8 @@ def test_three_pages_and_links_are_read_only_metadata(app, monkeypatch):
     assert run_path in Links(workflow).links
     detail = html(app.response(run_path))
     assert "Tasks" in detail and "doing fetch" in detail and "doing transform" in detail
+    assert "Succeeded · other.py · aaaaaaaa · Floe</title>" in detail
+    assert "other.py · Floe</title>" in workflow
     assert "script" not in Links(detail).tags and "form" not in Links(detail).tags
     assert all(call[0] in ("show", "show_all") for call in app.sd.mock_calls)
     assert all(call[1] == "7 days ago" for call in app.journal.calls if call[3] is None)
@@ -141,14 +156,54 @@ def test_malformed_backend_data_is_not_reported_as_a_bad_request(app):
     assert b"Unable to read workflow state" in response.body
 
 
+def test_transient_detail_error_retries_same_route_and_can_recover(app):
+    path = "/workflows/other.py/runs/" + "a" * 32
+    app.sd.show.side_effect = floe.SystemdError(["systemctl"], 1, "temporarily unavailable")
+    response = app.response(path)
+    source = response.body.decode()
+    assert response.status == 503
+    assert Links(source).links.count(path) == 2  # Refresh and Try again.
+    assert "floe status --name other.py" in source
+    assert "floe logs --name other.py " + "a" * 32 in source
+    assert "No workflow state was changed" in source
+    app.sd.show.side_effect = None
+    assert app.response(path).status == 200  # Error responses must not get stuck in the page cache.
+
+
+@pytest.mark.parametrize("path", ["//attacker.example", "/\\\\attacker.example", "/workflows/<script>",
+                                 "https://attacker.example/", "/workflows/x/runs/bad"])
+def test_error_retry_links_never_escape_validated_local_routes(app, path):
+    source = app.error(503, "<img src=x>", path=path).body.decode()
+    assert set(Links(source).links) == {"#content", "/"}
+    assert "&lt;img src=x&gt;" in source and "<img" not in source
+    assert not app.sd.mock_calls and not app.journal.calls
+
+
+def test_timer_health_is_separate_from_last_run_success(app):
+    app.sd.show_all.return_value = [("UnitFileState", "disabled"), ("ActiveState", "active")]
+    home = html(app.response("/"))
+    assert "Succeeded" in home and "Timer: active · disabled" in home
+    detail = html(app.response("/workflows/mydag"))
+    assert "Timer: active · disabled" in detail
+    app.cache.clear()
+    app.sd.show_all.side_effect = floe.SystemdError(["systemctl"], 1, "unknown manager state")
+    home = html(app.response("/"))
+    assert "Timer state unavailable" in home and "unknown manager state" in home
+    assert "Timer: inactive" not in home and "Timer: active · disabled" not in home
+
+
 def test_empty_and_uninstalled_workflows(app):
     app.journal = FakeJournal([])
-    assert "No recent runs" in html(app.response("/workflows/mydag"))
+    empty_workflow = html(app.response("/workflows/mydag"))
+    assert "No recent runs" in empty_workflow and 'floe status --name mydag' in empty_workflow
+    assert '30 days ago' in empty_workflow and 'Direct <code>floe run</code>' in empty_workflow
     assert app.response("/workflows/missing").status == 404
     app.journal = FakeJournal(Run("a" * 32).succeeded_run().records)
     assert "no longer installed" in html(app.response("/workflows/deleted"))
     empty = Application(floe.UnitStore(app.store.path / "absent"), app.sd, FakeJournal([]))
-    assert "No installed workflows" in html(empty.response("/"))
+    empty_home = html(empty.response("/"))
+    assert "No installed workflows" in empty_home and "floe install /path/to/workflow.py" in empty_home
+    assert "Installation enables its timer" in empty_home
 
 
 @pytest.mark.parametrize("path,code", [

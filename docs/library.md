@@ -22,6 +22,13 @@ src/floe_web/    localhost HTTP routing, escaped server-rendered HTML, small sty
 The web UI never loads workflow definitions and has no write routes. See
 [Dashboard](web.md) for its query limits and local-access constraints.
 
+`WorkflowSummary.timer_state` contains the queried timer `UnitState`, or `None`
+when the timer query failed. Its properties preserve the actual activity and
+unit-file states, including runtime-only enablement; missing properties remain
+unknown. The additive JSON `timer_state` field is that state's `to_dict()` or
+`null`. The existing `active` and `enabled` convenience booleans are unchanged;
+use the raw state when distinguishing unknown from inactive/disabled matters.
+
 `list_runs(..., max_records=N)` and `run_logs(..., max_records=N)` optionally
 read only the newest N records per selected invocation (plus one to detect
 truncation). The returned `Run.truncated` flag, also present in `to_dict()`,

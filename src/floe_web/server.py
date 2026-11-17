@@ -15,6 +15,7 @@ from . import render
 HISTORY_SINCE = "7 days ago"
 MAX_RECORDS = 1000
 CACHE_SECONDS = 3
+_WORKFLOW_ROUTE = re.compile(r"/workflows/([^/]+)(?:/runs/([0-9a-f]{32}))?")
 
 
 @dataclass(frozen=True)
@@ -57,23 +58,25 @@ class Application:
                 self.cache.popitem(last=False)
             return response
         except floe.NotFoundError as exc:
-            return self.error(404, str(exc))
+            return self.error(404, str(exc), path=path)
         except floe.ValidationError:
-            return self.error(400, "Invalid request")
+            return self.error(400, "Invalid request", path=path)
         except (floe.FloeError, OSError, ValueError) as exc:
-            return self.error(503, f"Unable to read workflow state: {exc}")
+            return self.error(503, f"Unable to read workflow state: {exc}", path=path)
 
     def page(self, path):
         if path == "/":
             return Response(200, render.document("Workflows", render.inventory(self.summaries()), path))
-        match = re.fullmatch(r"/workflows/([^/]+)(?:/runs/([0-9a-f]{32}))?", path)
+        match = _WORKFLOW_ROUTE.fullmatch(path)
         if not match:
             return self.error(404, "Page not found")
         name, run_id = match.groups()
         floe.unit_names(name)  # Validate as a name, including file-like names; never load it.
+        title = name
         if run_id:
             logs = floe.run_logs(name, run_id, self.journal, self.sd, max_records=MAX_RECORDS)
             body = render.run_detail(logs)
+            title = f"{logs.run.status.capitalize()} · {name} · {logs.run.run_id[:8]}"
         else:
             summary = next((item for item in self.summaries() if item.name == name), None)
             runs = floe.list_runs(name, self.journal, self.sd, since=HISTORY_SINCE,
@@ -81,11 +84,34 @@ class Application:
             if summary is None and not runs:
                 raise floe.NotFoundError(f"No installed workflow or recent history for {name!r}")
             body = render.workflow(name, summary, runs)
-        return Response(200, render.document(name, body, path))
+        return Response(200, render.document(title, body, path))
 
-    def error(self, code, message):
-        body = f"<h1>{code}</h1><p>{render.text(message)}</p>" + render.link("/", "← Workflows")
-        return Response(code, render.document(str(code), body, "/"))
+    def error(self, code, message, *, path="/"):
+        # Only known, validated routes can become retry links or CLI arguments.
+        name, run_id = None, None
+        match = _WORKFLOW_ROUTE.fullmatch(path)
+        if match:
+            candidate, candidate_id = match.groups()
+            try:
+                floe.unit_names(candidate)
+            except floe.ValidationError:
+                path = "/"
+            else:
+                name, run_id = candidate, candidate_id
+                path = render.workflow_url(name) + ("/runs/" + run_id if run_id else "")
+        else:
+            path = "/"
+        title = {400: "Invalid request", 403: "Local access only", 404: "Not found",
+                 503: "Workflow state unavailable"}.get(code, "Unable to show this page")
+        body = render.back("/", "Workflows") + f"<h1>{title}</h1><p>{render.text(message)}</p>"
+        if code == 503:
+            body += ("<p>" + render.link(path, "Try again", icon_name="refresh-cw")
+                     + ". No workflow state was changed.</p>")
+        elif code == 403:
+            body += "<p>Open the loopback address printed by <code>floe web</code>.</p>"
+        if code in (404, 503):
+            body += "<h2>Check from a terminal</h2>" + render.inspection_help(name, run_id)
+        return Response(code, render.document(title, body, path))
 
 
 class Server(HTTPServer):
@@ -125,6 +151,7 @@ class Handler(BaseHTTPRequestHandler):
                          "default-src 'none'; style-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
         self.end_headers()
         self.wfile.write(response.body)
+
 
 def serve(store, sd, journal, *, port=8080):
     """Serve until Ctrl-C. No daemonization, browser launch, or systemd writes."""

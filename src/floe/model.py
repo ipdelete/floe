@@ -445,7 +445,12 @@ class InstalledWorkflow:
 
 @dataclass(frozen=True)
 class WorkflowSummary:
-    """An installed workflow with its schedule, timer state, and last run."""
+    """An installed workflow with its schedule, timer state, and last run.
+
+    timer_state holds the queried properties, or None after a failed query.
+    Unlike the convenience booleans, it distinguishes missing/unknown evidence
+    from a known inactive or disabled state.
+    """
 
     workflow: InstalledWorkflow
     schedule: tuple[str, ...] = ()
@@ -455,6 +460,7 @@ class WorkflowSummary:
     last_trigger: datetime | None = None
     last_run: Run | None = None
     problems: tuple[str, ...] = ()
+    timer_state: UnitState | None = None
 
     @property
     def name(self) -> str:
@@ -464,4 +470,5 @@ class WorkflowSummary:
         return {**self.workflow.to_dict(), "schedule": list(self.schedule), "enabled": self.enabled,
                 "active": self.active, "next_run": _iso(self.next_run), "last_trigger": _iso(self.last_trigger),
                 "last_run": None if self.last_run is None else self.last_run.to_dict(),
-                "problems": list(self.problems)}
+                "problems": list(self.problems),
+                "timer_state": None if self.timer_state is None else self.timer_state.to_dict()}
