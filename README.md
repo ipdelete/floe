@@ -74,8 +74,8 @@ stdout carries only Floe's events. While tasks run, `floe run` sends anything
 they write to stdout to stderr instead, whether from `print()` or from child
 processes, and flushes Python's output before each event so that output stays
 with the task that wrote it. End output lines with a newline: under systemd,
-stdout and stderr can share one journal stream, so an unterminated line can be
-joined to the next event, which history then cannot recognize.
+stdout and stderr share one journal stream, so an unterminated line is joined
+to the next event, which history then cannot recognize.
 
 ## Run directly
 
@@ -183,7 +183,38 @@ repository or the workflow file requires `install` again.
 
 The service is `Type=oneshot`: activating it while it is already running does
 not create an overlapping run. Direct `floe run` invocations are not covered
-by that protection.
+by that protection, so a direct run of an installed workflow can overlap a
+scheduled one. For workflows that keep state between runs, use `floe start`,
+which joins a run already in progress instead of starting a second one.
+
+### The service environment
+
+A service is not started from your shell, so it may not find what your shell
+finds. Under systemd:
+
+- `PATH` is the user manager's, typically only system directories. Tools
+  installed through version managers or shell profiles (nvm, pyenv,
+  `~/.local/bin`) are not found: use absolute paths, or extend `PATH` for the
+  child processes a task starts.
+- Variables exported by your shell profile, such as API keys, are not set.
+  Keep credentials in files or in a tool's own credential store.
+- `HOME`, `USER`, `XDG_RUNTIME_DIR` and the session bus
+  (`DBUS_SESSION_BUS_ADDRESS`) are set. The locale can differ from your shell's,
+  for example `LANG=C.UTF-8`. There is no terminal.
+- Python is `/usr/bin/python3` without a virtual environment: workflow code can
+  import the standard library, modules next to the workflow file, and packages
+  installed for the system Python.
+
+`systemctl --user show-environment` shows the environment services start
+from. To try a workflow in that environment before installing it, run it as a
+transient unit. This executes its tasks, like `floe run`; `PYTHONPATH` is the
+`Floe=` directory shown by `floe install --dry-run`:
+
+```bash
+systemd-run --user --wait --pipe --collect \
+    -p WorkingDirectory="$PWD" -E PYTHONPATH="$HOME/src/floe/src" \
+    /usr/bin/python3 -m floe_cli run "$PWD/workflow.py"
+```
 
 ## Schedule executions
 
@@ -207,6 +238,44 @@ Changes to task code take effect on the next execution. Changes to `WORKFLOW`,
 `SCHEDULE` or the file's location need `install` again (`floe list --check`
 shows which workflows need it). Changing `WORKFLOW`
 creates new units: `floe uninstall <old-name>` first.
+
+To see a schedule start a run without waiting for it, temporarily add a
+one-off time a few minutes ahead, reinstall, and watch `floe runs`:
+
+```python
+SCHEDULE = ["*-*-* 08:00:00", "2026-11-17 13:12:00"]  # second entry: temporary test
+```
+
+Adding a future time does not start a run by itself. systemd's default timer
+accuracy (`AccuracySec=1min`) lets the run start up to a minute after the
+scheduled time. Remove the entry and run `floe install` again afterwards.
+`floe start` runs the service immediately, but does not exercise the timer.
+
+## Write workflows that run unattended
+
+Scheduled runs happen while nobody watches, and Floe never retries. These
+patterns keep such workflows predictable:
+
+- **Pass data through files.** Tasks take no arguments and return nothing.
+  Write their results to files, for example in a `state/` directory next to the
+  workflow file, and replace each file atomically (write a temporary file in the
+  same directory, then `os.replace` it) so a crash never leaves half a file.
+- **The next run is the retry.** After a failure, the next scheduled run starts
+  from the beginning. Make tasks safe to repeat: record what was done, keyed by
+  a stable identity such as an item ID, and skip it next time.
+- **Save results before acting on them.** When computing a result is expensive
+  or not repeatable, store it first; a run that fails while acting then leaves
+  the next run something to act on instead of computing it again.
+- **Check prerequisites first.** A task that checks required tools and
+  credentials, with the tasks that need them depending on it, fails clearly
+  instead of halfway through.
+- **Finish independent work, then fail.** When one of several independent
+  sources fails, record the failure, process the rest, and raise in a final task
+  so that `floe runs` shows the run as failed, with the reason.
+- **Bound external calls.** Give network requests and child processes their
+  own timeouts; the service's `TimeoutStartSec=30min` stops the whole run.
+- **Label what a run produces** with `FLOE_RUN_ID`, so files and records can
+  be traced back to `floe runs` and `floe logs`.
 
 ## Inspect execution history
 
