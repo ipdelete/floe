@@ -146,18 +146,90 @@ def journal_of(*ids):
     return FakeJournal(records)
 
 
-def test_list_runs_newest_first_with_limit_reading_lazily(sd):
+def test_list_runs_orders_candidates_and_fetches_complete_invocations(sd):
     ids = [f"{n:x}" * 32 for n in range(1, 6)]
     journal = journal_of(*ids)
     runs = list_runs("mydag", journal, sd, since="today", limit=2)
     assert [run.run_id for run in runs] == [ids[4], ids[3]]
-    assert journal.calls == [("mydag.service", "today", True)]
-    per_run = len(journal.records_list) // 5
-    assert journal.read == 2 * per_run + 1  # stopped at the first record of the third run
+    assert journal.calls == [
+        ("mydag.service", "today", True, None),
+        ("mydag.service", None, False, tuple(reversed(ids))),
+    ]
+    journal.calls.clear()
+    assert [r.run_id for r in list_runs("mydag", journal, sd, limit=2)] == [ids[4], ids[3]]
+    assert journal.calls[-1] == ("mydag.service", None, False, (ids[4], ids[3]))
     assert len(list_runs("mydag", journal, sd, limit=None)) == 5
     with pytest.raises(ValidationError):
         list_runs("mydag", journal, sd, limit=0)
     assert list_runs("mydag", FakeJournal([]), sd) == []
+
+
+def test_large_history_requests_return_every_run(sd):
+    ids = [f"{index:032x}" for index in range(150)]
+    runs = list_runs("mydag", journal_of(*ids), sd, limit=None)
+    assert [run.run_id for run in runs] == ids[::-1]
+    assert all(run.status == "succeeded" for run in runs)
+
+
+def test_full_id_lookup_fetches_only_that_invocation(sd):
+    journal = journal_of("a" * 32, "b" * 32)
+    run = get_run("mydag", "a" * 32, journal, sd)
+    assert run.run_id == "a" * 32 and run.status == "succeeded"
+    assert journal.calls == [("mydag.service", None, False, ("a" * 32,))]
+
+
+@pytest.mark.parametrize("late_after_completion", [False, True])
+def test_interleaved_invocations_have_complete_consistent_history(sd, late_after_completion):
+    old = Run("a" * 32).succeeded_run(tasks=("fetch",))
+    new = Run("b" * 32, old.us + 1_000_000).succeeded_run(tasks=("fetch",))
+    position = len(new.records) if late_after_completion else 4
+    late = {**old.records[3], "MESSAGE": "delayed output",
+            "__REALTIME_TIMESTAMP": str(int(new.records[position - 1]["__REALTIME_TIMESTAMP"]) + 1)}
+    journal = FakeJournal([*old.records, *new.records[:position], late, *new.records[position:]])
+    expected = get_run("mydag", new.id, journal, sd)
+    assert expected.tasks[0].started is not None
+    assert get_run("mydag", None, journal, sd) == expected
+    assert get_run("mydag", "bbbb", journal, sd) == expected
+    assert list_runs("mydag", journal, sd, limit=1) == [expected]
+    assert [r.run_id for r in list_runs("mydag", journal, sd)] == [new.id, old.id]
+    assert len(run_logs("mydag", None, journal, sd).lines) == len(new.records)
+
+
+def test_since_selects_complete_runs_even_when_their_starts_precede_the_window(sd):
+    old = Run("a" * 32).succeeded_run(tasks=("fetch",))
+    new = Run("b" * 32, old.us + 1_000_000).succeeded_run(tasks=("fetch",))
+    late = {**old.records[3], "__REALTIME_TIMESTAMP": str(new.us + 1)}
+    cutoff = int(new.records[0]["__REALTIME_TIMESTAMP"])
+
+    class WindowJournal(FakeJournal):
+        def records(self, unit, *, since=None, **kwargs):
+            for record in super().records(unit, since=since, **kwargs):
+                if since is None or int(record["__REALTIME_TIMESTAMP"]) >= cutoff:
+                    yield record
+
+    journal = WindowJournal([*old.records, *new.records, late])
+    expected = get_run("mydag", new.id, journal, sd)
+    assert list_runs("mydag", journal, sd, since="recent", limit=1) == [expected]
+    both = list_runs("mydag", journal, sd, since="recent", limit=None)
+    assert [run.run_id for run in both] == [new.id, old.id]
+    assert all(run.tasks[0].started is not None for run in both)
+
+
+@pytest.mark.parametrize("fields", [
+    {"event": "run_started", "timestamp": "2026-01-01T00:00:00"},
+    {"event": "run_completed", "status": "not-a-status"},
+    {"event": "task_completed", "task": "fetch"},
+])
+def test_malformed_events_are_output_not_history_state(sd, fields):
+    r = Run("a" * 32).succeeded_run(tasks=("fetch",))
+    data = {"schema": 1, "workflow": "mydag", "run_id": r.id,
+            "timestamp": "2026-01-01T00:00:00+00:00", **fields}
+    r.output(json.dumps(data))
+    logs = run_logs("mydag", None, FakeJournal(r.records), sd)
+    assert logs.run.status == "succeeded"
+    assert logs.run.tasks[0].status == "succeeded"
+    assert logs.lines[-1].kind == "output"
+    assert json.loads(json.dumps(logs.to_dict()))["run"]["duration"] is not None
 
 
 def test_records_without_invocation_are_ignored(sd):

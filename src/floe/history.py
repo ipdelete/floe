@@ -31,24 +31,24 @@ _RUN_ID = re.compile(r"[0-9a-f]{1,32}")
 
 def list_runs(workflow: str, journal: Journal, sd: Systemd, *,
               since: str | None = None, limit: int | None = 20) -> list[Run]:
-    """Recorded runs of an installed workflow, newest first."""
+    """Runs newest first, with complete records for each selected invocation.
+
+    `since` selects runs with journal activity in that range, not partial runs.
+    Discovery streams the journal; only selected invocations' records are kept.
+    """
     service, _ = unit_names(workflow)
     if limit is not None and limit < 1:
         raise ValidationError(["limit must be at least 1"])
-    groups: dict[str, list[dict]] = {}
-    # Newest first; runs of a oneshot service don't overlap, so once a new
-    # invocation appears after `limit` of them, those are complete.
-    for record in journal.records(service, since=since, reverse=True):
-        invocation = _invocation(record)
-        if invocation is None:
-            continue
-        if invocation not in groups:
-            if limit is not None and len(groups) == limit:
-                break
-            groups[invocation] = []
-        groups[invocation].append(record)
+    invocations = _run_ids(service, journal, since=since)
+    # With a time filter, fetch all candidates: their starts may precede the
+    # filter, so discovery alone cannot reliably order them by start time.
+    if since is None and limit is not None:
+        invocations = invocations[:limit]
+    groups = _records_for(service, invocations, journal)
     active = _active_invocation(service, sd)
-    return [_build_run(workflow, inv, records[::-1], inv == active) for inv, records in groups.items()]
+    runs = [_build_run(workflow, inv, records, inv == active) for inv, records in groups.items() if records]
+    runs.sort(key=lambda run: run.started, reverse=True)
+    return runs if limit is None else runs[:limit]
 
 
 def get_run(workflow: str, run_id: str | None, journal: Journal, sd: Systemd) -> Run:
@@ -67,24 +67,50 @@ def run_logs(workflow: str, run_id: str | None, journal: Journal, sd: Systemd) -
 def _find(service: str, run_id: str | None, journal: Journal) -> tuple[str, list[dict]]:
     if run_id is not None and not _RUN_ID.fullmatch(run_id):
         raise ValidationError([f"invalid run ID {run_id!r}: expected up to 32 lowercase hex digits"])
-    groups: dict[str, list[dict]] = {}
-    for record in journal.records(service, reverse=True):
-        invocation = _invocation(record)
-        if invocation is None:
-            continue
+    if run_id is not None and len(run_id) == 32:
+        invocations = [run_id]
+    else:
+        invocations = _run_ids(service, journal, prefix=run_id)
         if run_id is None:
-            if groups and invocation not in groups:
-                break  # the latest run is complete
-        elif not invocation.startswith(run_id):
-            continue
-        groups.setdefault(invocation, []).append(record)
-    if not groups:
+            invocations = invocations[:1]
+    if len(invocations) > 1:
+        raise NotFoundError(f"run ID {run_id!r} is ambiguous: matches {', '.join(sorted(invocations))}")
+    groups = _records_for(service, invocations, journal)
+    if not invocations or not groups[invocations[0]]:
         raise NotFoundError(f"no runs of {service} recorded" if run_id is None
                             else f"no run of {service} matches {run_id!r}")
-    if len(groups) > 1:
-        raise NotFoundError(f"run ID {run_id!r} is ambiguous: matches {', '.join(sorted(groups))}")
-    [(invocation, records)] = groups.items()
-    return invocation, records[::-1]
+    invocation = invocations[0]
+    return invocation, groups[invocation]
+
+
+def _run_ids(service: str, journal: Journal, *, since: str | None = None,
+             prefix: str | None = None) -> list[str]:
+    """Index start times, not record adjacency or the last output a run wrote."""
+    first: dict[str, datetime] = {}
+    started: dict[str, datetime] = {}
+    for record in journal.records(service, since=since, reverse=True):
+        invocation = _invocation(record)
+        if invocation is None or (prefix is not None and not invocation.startswith(prefix)):
+            continue
+        when = _time(record)
+        first[invocation] = min(first.get(invocation, when), when)
+        event = _event(record, invocation)
+        if event is not None and event.event == "run_started":
+            when = _event_time(event)
+            started[invocation] = min(started.get(invocation, when), when)
+    return sorted(first, key=lambda inv: started.get(inv, first[inv]), reverse=True)
+
+
+def _records_for(service: str, invocations: list[str], journal: Journal) -> dict[str, list[dict]]:
+    groups: dict[str, list[dict]] = {inv: [] for inv in invocations}
+    if groups:
+        # Avoid oversized command lines for explicitly large history requests.
+        selected = tuple(invocations) if len(invocations) <= 128 else None
+        for record in journal.records(service, invocations=selected):
+            invocation = _invocation(record)
+            if invocation in groups:
+                groups[invocation].append(record)
+    return groups
 
 
 def _active_invocation(service: str, sd: Systemd) -> str | None:
@@ -97,7 +123,8 @@ def _active_invocation(service: str, sd: Systemd) -> str | None:
 # --- Record parsing ------------------------------------------------------------
 
 def _invocation(record: dict) -> str | None:
-    return record.get("_SYSTEMD_INVOCATION_ID") or record.get("USER_INVOCATION_ID") or None
+    value = record.get("_SYSTEMD_INVOCATION_ID") or record.get("USER_INVOCATION_ID")
+    return value if isinstance(value, str) and re.fullmatch(r"[0-9a-f]{32}", value) else None
 
 
 def _from_systemd(record: dict) -> bool:
@@ -128,11 +155,9 @@ def _event(record: dict, invocation: str) -> Event | None:
     return event if event is not None and event.run_id == invocation else None
 
 
-def _event_time(event: Event, fallback: datetime) -> datetime:
-    try:
-        return datetime.fromisoformat(event.timestamp)
-    except ValueError:
-        return fallback
+def _event_time(event: Event) -> datetime:
+    # Event.from_dict has already checked that the timestamp has a UTC offset.
+    return datetime.fromisoformat(event.timestamp).astimezone(UTC)
 
 
 def _build_run(workflow: str, invocation: str, records: list[dict], running: bool) -> Run:
@@ -157,7 +182,7 @@ def _build_run(workflow: str, invocation: str, records: list[dict], running: boo
         if event is None:
             output.append(_message(record))
             continue
-        when = _event_time(event, _time(record))
+        when = _event_time(event)
         if event.event == "run_started":
             started = when
         elif event.event == "task_started" and event.task:
@@ -215,6 +240,6 @@ def _log_lines(invocation: str, records: Iterable[dict]) -> Iterator[LogLine]:
             continue
         if event.event == "task_started":
             task = event.task
-        yield LogLine(_event_time(event, when), "event", message, task=event.task, priority=priority, event=event)
+        yield LogLine(_event_time(event), "event", message, task=event.task, priority=priority, event=event)
         if event.event == "task_completed":
             task = None

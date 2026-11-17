@@ -54,6 +54,9 @@ def list_installed(store: UnitStore, *, package_root: Path = PACKAGE_ROOT) -> li
 def _installed(name: str, entry: _UnitPair, package_root: Path) -> InstalledWorkflow:
     problems = list(entry.problems)
     service, timer = entry.service, entry.timer
+    if any(meta.get("Cleanup") == "pending" for meta in entry.metadata.values()):
+        problems.append(f"timer-state cleanup pending; run floe uninstall --name {name}")
+        return InstalledWorkflow(name, None, service, timer, tuple(problems))
     for kind, path in (("service", service), ("timer", timer)):
         if path is None:
             problems.append(f"{kind} unit is missing; reinstall")

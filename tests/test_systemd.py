@@ -1,9 +1,29 @@
 import subprocess
-from unittest.mock import Mock
+from unittest.mock import Mock, call
 
 import pytest
 
-from floe.systemd import Systemd, SystemdError
+from floe.model import ValidationError
+from floe.systemd import Systemd, SystemdError, validate_calendars
+
+
+def test_calendars_use_systemd_parser_without_a_service_manager(monkeypatch):
+    run = Mock(return_value=subprocess.CompletedProcess([], 0, "", ""))
+    monkeypatch.setattr("floe.systemd.subprocess.run", run)
+    validate_calendars(("hourly", "2000-01-01"))
+    assert run.call_args_list == [
+        call(["systemd-analyze", "calendar", "--iterations=0", "--", expression],
+             capture_output=True, text=True, timeout=10)
+        for expression in ("hourly", "2000-01-01")
+    ]
+
+
+@pytest.mark.parametrize("error", [FileNotFoundError("missing analyzer"),
+                                   subprocess.TimeoutExpired("systemd-analyze", 10)])
+def test_calendar_validation_tool_failure_is_actionable(monkeypatch, error):
+    monkeypatch.setattr("floe.systemd.subprocess.run", Mock(side_effect=error))
+    with pytest.raises(ValidationError, match="cannot validate schedule with systemd-analyze"):
+        validate_calendars(("hourly",))
 
 
 @pytest.mark.parametrize("method,args,kwargs,command", [

@@ -89,6 +89,15 @@ def test_moved_floe_and_old_units(tmp_path, store, sd):
     assert found.problems == ("floe has moved since installation; reinstall",)
 
 
+def test_cleanup_marker_reports_recovery_instead_of_an_old_installation(store):
+    store.write("review.py.timer", "[Timer]\nOnCalendar=1970-01-01 00:00:00 UTC\n\n"
+                "[X-Floe]\nOwner=floe\nWorkflow=review.py\nCleanup=pending\n")
+    [found] = list_installed(store)
+    assert found.script is None
+    assert found.problems == ("timer-state cleanup pending; run floe uninstall --name review.py",)
+    assert check_installed(found, store) == []
+
+
 def test_find_installed(tmp_path, store, sd):
     script = deploy(tmp_path, store, sd)
     assert find_installed(store, "mydag").script == script

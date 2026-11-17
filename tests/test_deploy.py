@@ -74,6 +74,25 @@ def test_all_destinations_preflighted_before_writes(dep, tmp_path, sd, adopt, de
     assert sd.mock_calls == []
 
 
+@pytest.mark.parametrize("already_installed", [False, True])
+def test_invalid_calendars_never_create_or_replace_units(dep, tmp_path, sd, already_installed):
+    store = UnitStore(tmp_path / "units")
+    if already_installed:
+        install(dep, store, sd)
+    before = {name: ((store.path / name).read_bytes(), (store.path / name).stat().st_mtime_ns)
+              for name in store.units()}
+    sd.reset_mock()
+    invalid = Deployment(dep.workflow, dep.script, ("not-a-calendar", "daily", "also-invalid"))
+    with pytest.raises(ValidationError) as caught:
+        install(invalid, store, sd)
+    assert len(caught.value.problems) == 2
+    assert "not-a-calendar" in caught.value.problems[0]
+    assert "also-invalid" in caught.value.problems[1]
+    assert {name: ((store.path / name).read_bytes(), (store.path / name).stat().st_mtime_ns)
+            for name in store.units()} == before
+    assert sd.mock_calls == []
+
+
 def test_plan_describes_changes_without_writing(dep, tmp_path, sd):
     store = UnitStore(tmp_path / "units")
     plan = plan_install(dep, store)
@@ -240,6 +259,47 @@ def test_uninstall_rerun_finishes_after_failed_reload(dep, tmp_path, sd):
     assert not link.is_symlink()
 
 
+@pytest.mark.parametrize("files_exist", [True, False])
+def test_uninstall_retries_failed_timer_state_cleanup(dep, tmp_path, sd, files_exist):
+    store = UnitStore(tmp_path / "units")
+    link = _install_enabled(dep, store, sd)
+    if not files_exist:
+        for name in (dep.service_name, dep.timer_name):
+            (store.path / name).unlink()
+    stamp = tmp_path / "timer-stamp"
+    stamp.touch()
+    reloaded = []
+    sd.daemon_reload.side_effect = lambda: reloaded.append(True)
+    sd.show.side_effect = lambda name, *props: (
+        {"LoadState": "loaded", "ActiveState": "inactive", "FragmentPath": str(store.path / name)}
+        if not reloaded or (store.path / name).exists()
+        else {"LoadState": "not-found", "ActiveState": "inactive", "FragmentPath": ""})
+    attempts = []
+
+    def clean(name):
+        attempts.append(name)
+        if len(attempts) == 1:
+            raise SystemdError(["systemctl", "clean"], 1, "temporary cleanup failure")
+        stamp.unlink()
+
+    sd.clean_state.side_effect = clean
+    with pytest.raises(UninstallError, match="temporary cleanup failure") as caught:
+        uninstall(dep.workflow, store, sd)
+    assert caught.value.removed == ([dep.service_name] if files_exist else [])
+    assert store.units() == [dep.timer_name]
+    assert store.is_owned(dep.timer_name)
+    if not files_exist:
+        assert "OnCalendar=1970-01-01 00:00:00 UTC" in (store.path / dep.timer_name).read_text()
+        assert store.metadata(dep.timer_name)["Cleanup"] == "pending"
+    assert not link.is_symlink()
+    assert stamp.exists()
+
+    assert uninstall(dep.workflow, store, sd) == [dep.timer_name]
+    assert attempts == [dep.timer_name, dep.timer_name]
+    assert not stamp.exists()
+    assert store.units() == []
+
+
 def test_uninstall_resets_failed_units_so_systemd_forgets_them(dep, tmp_path, sd):
     store = UnitStore(tmp_path / "units")
     install(dep, store, sd)
@@ -304,7 +364,8 @@ def test_uninstall_reports_manager_query_failure(dep, tmp_path, sd, files_exist,
     with pytest.raises(UninstallError) as caught:
         uninstall(dep.workflow, store, sd)
     assert str(error) in str(caught.value)
-    assert caught.value.removed == ([dep.timer_name, dep.service_name] if files_exist else [])
+    assert caught.value.removed == ([dep.service_name] if files_exist else [])
+    assert store.is_owned(dep.timer_name) is files_exist
     sd.disable.assert_not_called()
     sd.stop.assert_not_called()
     sd.clean_state.assert_not_called()

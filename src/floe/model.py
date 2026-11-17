@@ -9,7 +9,7 @@ import difflib
 import re
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from graphlib import CycleError, TopologicalSorter
 from pathlib import Path
 from types import MappingProxyType
@@ -211,16 +211,36 @@ class Event:
     @classmethod
     def from_dict(cls, data: object) -> Event | None:
         """Parse a JSON event, or return None if it isn't one of this schema."""
-        if not isinstance(data, dict) or data.get("schema") != EVENT_SCHEMA:
+        if not isinstance(data, dict) or type(data.get("schema")) is not int or data["schema"] != EVENT_SCHEMA:
             return None
         if data.get("event") not in ("run_started", "task_started", "task_completed", "run_completed"):
             return None
         fields = {key: data.get(key) for key in ("workflow", "run_id", "timestamp", "task", "status", "error")}
-        if not all(isinstance(fields[key], str) for key in ("workflow", "run_id", "timestamp")):
+        if not all(isinstance(fields[key], str) and fields[key] for key in ("workflow", "run_id", "timestamp")):
             return None
         if any(fields[key] is not None and not isinstance(fields[key], str) for key in ("task", "status", "error")):
             return None
-        return cls(event=data["event"], **fields)
+        kind = data["event"]
+        if kind.startswith("task_"):
+            if not fields["task"]:
+                return None
+        elif fields["task"] is not None:
+            return None
+        if kind.endswith("_completed"):
+            if fields["status"] not in ("succeeded", "failed"):
+                return None
+        elif fields["status"] is not None:
+            return None
+        if fields["error"] is not None and fields["status"] != "failed":
+            return None
+        try:
+            timestamp = datetime.fromisoformat(fields["timestamp"])
+            if timestamp.utcoffset() is None:
+                return None
+            timestamp.astimezone(UTC)  # also reject offsets that overflow datetime's range
+        except (ValueError, OverflowError):
+            return None
+        return cls(event=kind, **fields)
 
     def to_dict(self) -> dict:
         data = {"schema": self.schema, "event": self.event, "workflow": self.workflow,

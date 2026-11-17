@@ -9,8 +9,8 @@ execution.
 ## Requirements
 
 - Linux with systemd and a user systemd session
-- Python 3.14 or newer, as specified by this repository
-- `systemctl` and `journalctl`
+- Python 3.14 or newer; deployed services also require `/usr/bin/python3` to be 3.14 or newer
+- `systemctl`, `journalctl`, and `systemd-analyze` (for deployment calendar validation)
 - [uv](https://docs.astral.sh/uv/) to install the `floe` command
 
 ```bash
@@ -60,8 +60,11 @@ Task names must be nonempty strings. Workflow names must be 1–247 ASCII
 characters, start with a letter or digit, and contain only letters, digits,
 `_`, `.` or `-`; they are also the systemd unit names. Floe validates the whole
 definition when loading it and reports every problem at once (missing or
-unknown tasks, cycles, non-callable tasks, bad names or schedules), before any
-task runs or any unit is installed.
+unknown tasks, cycles, non-callable tasks, bad names or malformed schedule
+values), before any task runs. When planning an installation, including
+`install --dry-run`, Floe also parses every calendar expression with
+`systemd-analyze` before either unit can be written. Direct execution does not
+need systemd tools.
 
 Tasks run one at a time. An exception stops the workflow, records failure, and
 returns a nonzero exit code. Tasks following the failure are not executed,
@@ -97,7 +100,10 @@ floe uninstall mydag                          # disable, stop, delete the unit f
 ```
 
 Every command accepts the workflow file or, once installed, the workflow name.
-Targets ending in `.py` or containing `/` are files; anything else is a name.
+By default, targets ending in `.py` or containing `/` are files; anything else
+is a name. Pass `--name` to explicitly interpret the target as a workflow name,
+for example `floe uninstall --name report.py`. This also works for already-installed
+names ending in `.py`, even after their definition is deleted.
 `floe run mydag` and `floe install mydag` use the file recorded at install
 time; `uninstall` by name works even after the file is deleted.
 
@@ -123,7 +129,9 @@ a missing definition file, units that point at Floe in another location, and
 units installed by an older Floe version. `--check` also loads each definition
 (running its top-level code) to find units that are out of date, for example
 after editing `SCHEDULE` without reinstalling, and then exits nonzero if any
-workflow has a problem. The schedule is shown as systemd normalizes it.
+workflow has a problem. Python stdout emitted while loading definitions or their
+imports is sent to stderr by the CLI, keeping JSON and table output separate.
+The schedule is shown as systemd normalizes it.
 
 `install` writes `<config>/systemd/user/<WORKFLOW>.service` and `.timer`,
 where `<config>` is `$XDG_CONFIG_HOME` when set to an absolute path, otherwise
@@ -142,8 +150,12 @@ has the units loaded from Floe's files and that the service is not still
 running, resetting a failed state so systemd forgets the unit. It also removes
 the timer's last-trigger stamp; otherwise a later install would immediately
 "catch up" with a run (`Persistent=true`). Any failures are reported together
-with a nonzero exit code. Rerunning
-it continues an interrupted uninstall, including units whose files are gone but
+with a nonzero exit code. If timer-state cleanup fails, Floe keeps the timer
+file as proof of ownership for a retry; if that file was already gone, it writes
+a recovery timer with a past-only calendar and no future trigger. `floe list`
+identifies this recovery marker and shows the command to finish cleanup. Enable
+links are still removed, and other cleanup steps continue. Rerunning the command
+continues the interrupted uninstall, including units whose files are gone but
 are still loaded. Same-named units loaded from other directories are not touched.
 
 The generated service runs `/usr/bin/python3 -m floe_cli run <path>/workflow.py`
@@ -199,6 +211,15 @@ RUN       STARTED              STATUS     DURATION  DETAIL
 29b24993  2026-11-16 07:45:25  failed     2.3s      transform: broken input
 ca9f4c32  2026-11-16 07:34:38  succeeded  0.0s
 ```
+
+Runs are ordered by start time (or the earliest available record if the start
+was lost). Discovery streams the matching journal history, then fetches complete
+records for the selected invocations; delayed records from an older run do not
+truncate a newer run. `--since` selects runs with journal activity in that range,
+but their displayed history also includes records from before the cutoff.
+
+Only schema-valid events with timezone-aware timestamps are used to reconstruct
+runs. Other JSON, including malformed event-shaped output, remains ordinary output.
 
 A run's ID is its systemd invocation ID. Its status is:
 
@@ -271,7 +292,7 @@ for past in floe.list_runs("mydag", floe.Journal(), floe.Systemd(), limit=5):
 
 ```bash
 uv run pytest -q
-uv run python examples/deploy_demo.py  # plan the example's deployment without writing or calling systemd
+uv run python examples/deploy_demo.py  # validate calendars and plan deployment without contacting the service manager
 ```
 
 Normal tests use temporary directories and mock the service manager. History

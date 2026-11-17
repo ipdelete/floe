@@ -1,4 +1,6 @@
-"""Plan the example workflow's deployment without writing or calling systemd.
+"""Plan deployment without writing or contacting the service manager.
+
+Calendar validation uses systemd-analyze, which does not need a user session.
 
     uv run python examples/deploy_demo.py
 

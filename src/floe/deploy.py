@@ -23,7 +23,7 @@ from .model import (
 )
 from .render import render_service, render_timer
 from .store import UnitStore
-from .systemd import Systemd
+from .systemd import Systemd, validate_calendars
 
 __all__ = [
     "Deployment", "apply", "install", "plan_install", "start", "status", "uninstall",
@@ -106,9 +106,11 @@ class Deployment:
 
 
 def plan_install(dep: Deployment, store: UnitStore, *, adopt: bool = False) -> InstallPlan:
-    """Describe what installing would change. Reads files; writes nothing."""
+    """Validate calendars and describe changes, without writing or calling systemctl."""
+    units = dep.render_units()
+    validate_calendars(dep.schedule)
     changes = []
-    for name, text in dep.render_units().items():
+    for name, text in units.items():
         path = store.path / name
         if path.is_symlink() or (path.exists() and not path.is_file()):
             changes.append(UnitChange(name, path, "conflict", text,
@@ -157,13 +159,22 @@ def install(dep: Deployment, store: UnitStore, sd: Systemd, *, adopt: bool = Fal
 _RUNNING = ("active", "activating", "deactivating", "reloading", "refreshing")
 
 
+@dataclass(frozen=True)
+class _UninstallUnits:
+    owned_files: set[str]
+    present_files: set[str]
+    safe_to_stop: set[str]
+    unknown: set[str]
+
+
 def _classify_uninstall(names: tuple[str, str], store: UnitStore, sd: Systemd,
-                        errors: list[str]) -> tuple[set[str], set[str], set[str]]:
-    """Return owned files, present files, and units that are safe to stop."""
+                        errors: list[str]) -> _UninstallUnits:
+    """Keep file ownership, loaded-unit ownership, and failed queries distinct."""
     owned_files = {name for name in names if store.is_owned(name)}
     present_files = {name for name in names
                      if (store.path / name).exists() or (store.path / name).is_symlink()}
     safe_to_stop: set[str] = set()
+    unknown: set[str] = set()
     for name in names:
         if name in present_files and name not in owned_files:
             continue
@@ -171,13 +182,14 @@ def _classify_uninstall(names: tuple[str, str], store: UnitStore, sd: Systemd,
             props = sd.show(name, "LoadState", "FragmentPath")
         except (OSError, SystemdError) as exc:
             errors.append(str(exc))
-            continue  # unknown ownership: remove our files, but do not stop a unit
+            unknown.add(name)
+            continue  # unknown ownership: do not stop a unit
         fragment = props.get("FragmentPath", "")
         if store.owns_path(name, fragment) or (
             not fragment and props.get("LoadState") == "not-found" and name in owned_files
         ):
             safe_to_stop.add(name)
-    return owned_files, present_files, safe_to_stop
+    return _UninstallUnits(owned_files, present_files, safe_to_stop, unknown)
 
 
 def _owned_unit_state(name: str, store: UnitStore, sd: Systemd,
@@ -235,37 +247,49 @@ def uninstall(workflow: str, store: UnitStore, sd: Systemd) -> list[str]:
             errors.append(str(exc))
             return False
 
-    owned_files, present_files, safe_to_stop = _classify_uninstall(names, store, sd, errors)
-    units_to_verify = [name for name in names if name in owned_files or name in safe_to_stop]
+    units = _classify_uninstall(names, store, sd, errors)
+    units_to_verify = [name for name in names if name in units.owned_files or name in units.safe_to_stop]
+    retain_timer = timer in units.owned_files and timer in units.unknown
 
     # Stop new activations first, then the current run. An owned file alone
     # must not authorize stopping a same-named fragment loaded from elsewhere.
-    if timer in safe_to_stop:
-        if timer in owned_files:
+    if timer in units.safe_to_stop:
+        if timer in units.owned_files:
             if not attempt(sd.disable, timer, now=True):
                 attempt(sd.stop, timer, missing_ok=True)
         else:
             attempt(sd.stop, timer, missing_ok=True)
-    if service in safe_to_stop:
+    if service in units.safe_to_stop:
         attempt(sd.stop, service, missing_ok=True)
-    if timer in safe_to_stop:
-        # Forget when it last fired: otherwise a later install with
-        # Persistent=true runs the workflow at once to "catch up".
-        attempt(sd.clean_state, timer)
+    if timer in units.safe_to_stop:
+        # Keep proof of ownership until the last-trigger stamp is gone.
+        retain_timer = not attempt(sd.clean_state, timer)
+        if retain_timer and timer not in units.owned_files:
+            # Recover an interrupted uninstall whose files were already gone.
+            # A past-only calendar has no future trigger, even if a failed
+            # stop left the old timer active when daemon-reload reads this.
+            marker = (f"[Timer]\nOnCalendar=1970-01-01 00:00:00 UTC\nPersistent=yes\nUnit={service}\n\n"
+                      "[Install]\nWantedBy=timers.target\n\n"
+                      f"[X-Floe]\nOwner=floe\nWorkflow={workflow}\nCleanup=pending\n")
+            attempt(store.write, timer, marker)
 
-    # Remove files even if stopping failed: the timer can no longer start new
-    # runs, and systemd keeps managing a running process until it exits.
+    # Continue removing files and enable links after failures, except for a
+    # timer that must remain discoverable for retrying its state cleanup.
     removed = []
     for name in names:
-        if name in owned_files:
+        if name == timer and retain_timer:
+            attempt(store.remove_links, name)
+            errors.append(f"{timer}: timer-state cleanup is pending; rerun uninstall")
+        elif name in units.owned_files:
             if attempt(store.remove, name):
                 removed.append(name)
-        elif name not in present_files:
+        elif name not in units.present_files:
             attempt(store.remove_links, name)  # dangling links from an interrupted run
 
     if units_to_verify:
         attempt(sd.daemon_reload)
-        _verify_unloaded(units_to_verify, store, sd, errors)
+        _verify_unloaded([name for name in units_to_verify if not (name == timer and retain_timer)],
+                         store, sd, errors)
     if errors:
         raise UninstallError(removed, errors)
     return removed

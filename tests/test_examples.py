@@ -1,4 +1,4 @@
-"""The examples the README points at still work. No systemd involved."""
+"""The examples the README points at still work. No service manager involved."""
 
 import json
 import runpy

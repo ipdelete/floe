@@ -4,6 +4,7 @@ into text and exit codes. No workflow or deployment logic lives here."""
 import argparse
 import json
 import sys
+from contextlib import redirect_stdout
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -62,11 +63,11 @@ def _parser() -> argparse.ArgumentParser:
 
     definition = "workflow definition file, or the name of an installed workflow"
     p = sub.add_parser("run", help="run a workflow now in this process, printing JSON events")
-    p.add_argument("target", help=definition)
+    _add_target(p, definition)
     p.set_defaults(handler=_run)
 
     p = sub.add_parser("install", help="write unit files, reload systemd, enable the timer")
-    p.add_argument("target", help=f"{definition} (to reinstall)")
+    _add_target(p, f"{definition} (to reinstall)")
     p.add_argument("--adopt", action="store_true", help="take over existing unit files not written by floe")
     p.add_argument("--dry-run", action="store_true", help="show what would change and do nothing")
     p.set_defaults(handler=_install)
@@ -78,7 +79,7 @@ def _parser() -> argparse.ArgumentParser:
         ("status", _status, "show systemd state of the service and timer"),
     ]:
         p = sub.add_parser(name, help=text)
-        p.add_argument("target", help=target)
+        _add_target(p, target)
         p.set_defaults(handler=handler)
 
     p = sub.add_parser("list", help="list installed workflows with schedule and last run")
@@ -88,18 +89,29 @@ def _parser() -> argparse.ArgumentParser:
     p.set_defaults(handler=_list)
 
     p = sub.add_parser("runs", help="list recorded runs under systemd, newest first")
-    p.add_argument("target", help=target)
+    _add_target(p, target)
     p.add_argument("--since", help='journalctl time, e.g. "24 hours ago", "today", "2026-01-31"')
     p.add_argument("-n", "--limit", type=_positive, default=20, help="number of runs (default: 20)")
     p.add_argument("--json", action="store_true", help="print runs as JSON")
     p.set_defaults(handler=_runs)
 
     p = sub.add_parser("logs", help="show a run's events and output (default: latest run)")
-    p.add_argument("target", help=target)
+    _add_target(p, target)
     p.add_argument("run_id", nargs="?", help="run ID or unique prefix")
     p.add_argument("--json", action="store_true", help="print the run and its lines as JSON")
     p.set_defaults(handler=_logs)
     return parser
+
+
+def _add_target(parser: argparse.ArgumentParser, help_text: str) -> None:
+    parser.add_argument("target", help=help_text)
+    parser.add_argument("--name", action="store_true", help="treat TARGET as a workflow name, even if it ends in .py")
+
+
+def _load(path: Path | str) -> floe.Workflow:
+    # Definition and import side effects must not corrupt JSON or event stdout.
+    with redirect_stdout(sys.stderr):
+        return floe.load(path)
 
 
 def _positive(value: str) -> int:
@@ -114,17 +126,17 @@ def _is_path(target: str) -> bool:
     return target.endswith(".py") or "/" in target
 
 
-def _workflow_name(target: str) -> str:
-    """A workflow name, from a definition file or given directly (e.g. after deleting the file)."""
-    if _is_path(target):
-        return floe.load(target).name
+def _workflow_name(target: str, *, name: bool = False) -> str:
+    """Resolve a file or name; --name bypasses file-like target detection."""
+    if not name and _is_path(target):
+        return _load(target).name
     floe.unit_names(target)  # validates the name
     return target
 
 
-def _definition(target: str, ctx) -> Path:
+def _definition(target: str, ctx, *, name: bool = False) -> Path:
     """A definition file, given directly or recorded for an installed workflow."""
-    if _is_path(target):
+    if not name and _is_path(target):
         return Path(target)
     installed = floe.find_installed(ctx.store, target)
     if installed.script is None:
@@ -133,7 +145,7 @@ def _definition(target: str, ctx) -> Path:
 
 
 def _run(args, ctx) -> int:
-    workflow = floe.load(_definition(args.target, ctx))
+    workflow = _load(_definition(args.target, ctx, name=args.name))
 
     def emit(event: floe.Event) -> None:
         print(json.dumps(event.to_dict()), flush=True)
@@ -142,7 +154,7 @@ def _run(args, ctx) -> int:
 
 
 def _install(args, ctx) -> int:
-    dep = floe.Deployment.for_workflow(floe.load(_definition(args.target, ctx)))
+    dep = floe.Deployment.for_workflow(_load(_definition(args.target, ctx, name=args.name)))
     plan = floe.plan_install(dep, ctx.store, adopt=args.adopt)
     if args.dry_run:
         for change in plan.changes:
@@ -155,13 +167,13 @@ def _install(args, ctx) -> int:
 
 
 def _uninstall(args, ctx) -> int:
-    removed = floe.uninstall(_workflow_name(args.target), ctx.store, ctx.sd)
+    removed = floe.uninstall(_workflow_name(args.target, name=args.name), ctx.store, ctx.sd)
     print(f"removed: {', '.join(removed) or 'nothing'}")
     return 0
 
 
 def _start(args, ctx) -> int:
-    name = _workflow_name(args.target)
+    name = _workflow_name(args.target, name=args.name)
     try:
         floe.start(name, ctx.sd)
     except floe.SystemdError:
@@ -172,7 +184,7 @@ def _start(args, ctx) -> int:
 
 
 def _status(args, ctx) -> int:
-    for unit in floe.status(_workflow_name(args.target), ctx.sd).values():
+    for unit in floe.status(_workflow_name(args.target, name=args.name), ctx.sd).values():
         print(unit.name)
         for key, value in unit.properties.items():
             print(f"  {key}={value}")
@@ -180,7 +192,8 @@ def _status(args, ctx) -> int:
 
 
 def _list(args, ctx) -> int:
-    summaries = floe.overview(ctx.store, ctx.sd, ctx.journal, verify=args.check)
+    with redirect_stdout(sys.stderr):
+        summaries = floe.overview(ctx.store, ctx.sd, ctx.journal, verify=args.check)
     if args.json:
         print(json.dumps([summary.to_dict() for summary in summaries], indent=2))
     elif not summaries:
@@ -215,7 +228,8 @@ def _home(path: Path | None) -> str:
 
 
 def _runs(args, ctx) -> int:
-    runs = floe.list_runs(_workflow_name(args.target), ctx.journal, ctx.sd, since=args.since, limit=args.limit)
+    runs = floe.list_runs(_workflow_name(args.target, name=args.name), ctx.journal, ctx.sd,
+                          since=args.since, limit=args.limit)
     if args.json:
         print(json.dumps([run.to_dict() for run in runs], indent=2))
         return 0
@@ -231,7 +245,7 @@ def _runs(args, ctx) -> int:
 
 
 def _logs(args, ctx) -> int:
-    logs = floe.run_logs(_workflow_name(args.target), args.run_id, ctx.journal, ctx.sd)
+    logs = floe.run_logs(_workflow_name(args.target, name=args.name), args.run_id, ctx.journal, ctx.sd)
     if args.json:
         print(json.dumps(logs.to_dict(), indent=2))
         return 0

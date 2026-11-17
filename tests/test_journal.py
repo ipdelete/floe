@@ -8,7 +8,7 @@ from concurrent.futures import ThreadPoolExecutor
 import pytest
 
 from floe.journal import FIELDS, Journal
-from floe.model import SystemdError
+from floe.model import SystemdError, ValidationError
 
 SCRIPT = """#!/bin/sh
 printf '%s\\n' "$@" > "{log}"
@@ -41,6 +41,27 @@ def test_records_command_and_parsing(fake):
     assert fake.read_text().splitlines() == [
         "--user", "--unit=mydag.service", "--output=json", "--no-pager",
         f"--output-fields={','.join(FIELDS)}", "--since=24 hours ago", "--reverse"]
+
+
+def test_invocation_filter_matches_application_or_manager_records(fake):
+    ids = ("a" * 32, "b" * 32)
+    list(Journal().records("mydag.service", invocations=ids))
+    assert fake.read_text().splitlines()[-5:] == [
+        f"_SYSTEMD_INVOCATION_ID={ids[0]}", f"_SYSTEMD_INVOCATION_ID={ids[1]}", "+",
+        f"USER_INVOCATION_ID={ids[0]}", f"USER_INVOCATION_ID={ids[1]}",
+    ]
+
+
+def test_empty_invocation_filter_does_not_start_journalctl(fake):
+    assert list(Journal().records("mydag.service", invocations=())) == []
+    assert not fake.exists()
+
+
+@pytest.mark.parametrize("value", ["", "XYZ", "a" * 31, "a" * 33, "+", None])
+def test_invalid_invocation_filter_is_rejected(fake, value):
+    with pytest.raises(ValidationError, match="invocation IDs"):
+        list(Journal().records("mydag.service", invocations=(value,)))
+    assert not fake.exists()
 
 
 def test_default_is_oldest_first_without_since(fake):

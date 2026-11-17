@@ -5,11 +5,12 @@ can be replaced with a fake in tests.
 """
 
 import json
+import re
 import subprocess
 import tempfile
 from collections.abc import Iterator
 
-from .model import SystemdError
+from .model import SystemdError, ValidationError
 
 __all__ = ["FIELDS", "Journal"]
 
@@ -24,18 +25,30 @@ class Journal:
     def __init__(self, user: bool = True):
         self.base = ["journalctl", "--user"] if user else ["journalctl"]
 
-    def records(self, unit: str, *, since: str | None = None, reverse: bool = False) -> Iterator[dict]:
+    def records(self, unit: str, *, since: str | None = None, reverse: bool = False,
+                invocations: tuple[str, ...] | None = None) -> Iterator[dict]:
         """Stream a unit's journal records as dicts, oldest first unless reverse.
 
         Records are read lazily: stopping iteration early stops journalctl.
         `since` takes any journalctl --since value ("24 hours ago", "today", ...).
+        `invocations` selects both application and manager records for those IDs.
         """
+        if invocations is not None:
+            if any(not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{32}", value)
+                   for value in invocations):
+                raise ValidationError(["invocation IDs must be 32 lowercase hex digits"])
+            if not invocations:
+                return
         cmd = [*self.base, f"--unit={unit}", "--output=json", "--no-pager",
                f"--output-fields={','.join(FIELDS)}"]
         if since is not None:
             cmd.append(f"--since={since}")
         if reverse:
             cmd.append("--reverse")
+        if invocations is not None:
+            cmd.extend(f"_SYSTEMD_INVOCATION_ID={value}" for value in invocations)
+            cmd.append("+")  # either the process's ID or the manager's ID
+            cmd.extend(f"USER_INVOCATION_ID={value}" for value in invocations)
         with tempfile.TemporaryFile("w+") as stderr:  # a file cannot fill up and block
             proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=stderr, text=True)
             finished = False

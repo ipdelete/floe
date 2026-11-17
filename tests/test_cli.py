@@ -195,7 +195,10 @@ def test_runs_table(sd, capsys):
     sd.show.return_value = {"ActiveState": "inactive"}
     journal = history_journal()
     assert main(["runs", "mydag", "--since", "today", "-n", "5"], sd=sd, journal=journal) == 0
-    assert journal.calls == [("mydag.service", "today", True)]
+    assert journal.calls == [
+        ("mydag.service", "today", True, None),
+        ("mydag.service", None, False, ("b" * 32, "a" * 32)),
+    ]
     lines = capsys.readouterr().out.splitlines()
     assert lines[0].split() == ["RUN", "STARTED", "STATUS", "DURATION", "DETAIL"]
     assert lines[1].startswith("bbbbbbbb ") and "failed" in lines[1] and lines[1].endswith("fetch: broken input")
@@ -205,7 +208,10 @@ def test_runs_table(sd, capsys):
     assert main(["runs", "mydag", "-n", "1"], sd=sd, journal=journal) == 0
     limited = capsys.readouterr().out.splitlines()
     assert [line.split() for line in limited] == [line.split() for line in lines[:2]]
-    assert journal.calls[-1] == ("mydag.service", None, True)
+    assert journal.calls[-2:] == [
+        ("mydag.service", None, True, None),
+        ("mydag.service", None, False, ("b" * 32,)),
+    ]
 
 
 def test_runs_json_and_empty(sd, capsys):
@@ -294,6 +300,75 @@ def test_list_aligns_multiple_workflows_and_keeps_problems_with_their_row(flow, 
     assert first.index("*-*-*") == second.index("*-*-*") == header.index("SCHEDULE")
     assert first_problem == "  ! units out of date (mydag.timer); reinstall"
     assert second_problem == f"  ! script not found: {other}"
+
+
+@pytest.mark.parametrize("command", ["run", "install", "start", "status", "runs", "logs", "uninstall"])
+def test_explicit_name_target_supports_py_suffix(flow, store, sd, capsys, command):
+    flow.write_text(flow.read_text().replace('WORKFLOW = "mydag"', 'WORKFLOW = "review.py"'))
+    assert main(["install", str(flow)], store=store, sd=sd) == 0
+    if command not in ("run", "install"):
+        flow.unlink()
+    capsys.readouterr()
+    result = main([command, "--name", "review.py"], store=store, sd=sd, journal=FakeJournal([]))
+    out, err = capsys.readouterr()
+    assert result == (1 if command == "logs" else 0)
+    assert "workflow file not found" not in err
+    if command == "run":
+        assert json.loads(out.splitlines()[-1])["workflow"] == "review.py"
+    elif command == "install":
+        assert "nothing (up to date)" in out
+    elif command == "start":
+        sd.start.assert_called_once_with("review.py.service", wait=True)
+    elif command == "status":
+        assert "review.py.service" in out and "review.py.timer" in out
+    elif command == "runs":
+        assert out == "no runs recorded\n"
+    elif command == "logs":
+        assert "no runs of review.py.service recorded" in err
+    else:
+        assert store.units() == []
+
+
+@pytest.mark.parametrize("invalid", [False, True])
+def test_list_check_json_routes_import_output_to_stderr(flow, store, sd, capsys, invalid):
+    assert main(["install", str(flow)], store=store, sd=list_sd(sd)) == 0
+    (flow.parent / "helper.py").write_text('print("helper initialized")\n')
+    body = "import helper\n" + flow.read_text()
+    if invalid:
+        body += '\nraise RuntimeError("broken definition")\n'
+    flow.write_text(body)
+    capsys.readouterr()
+    assert main(["list", "--check", "--json"], store=store, sd=sd, journal=FakeJournal([])) == int(invalid)
+    out, err = capsys.readouterr()
+    [entry] = json.loads(out)
+    assert entry["name"] == "mydag"
+    assert bool(entry["problems"]) is invalid
+    assert "helper initialized" in err
+
+
+@pytest.mark.parametrize("command", ["run", "runs", "logs"])
+def test_definition_import_output_does_not_corrupt_json(flow, sd, capsys, command):
+    (flow.parent / "helper.py").write_text('print("helper initialized")\n')
+    flow.write_text("import helper\n" + flow.read_text())
+    args = [command, str(flow)] + ([] if command == "run" else ["--json"])
+    assert main(args, sd=sd, journal=history_journal()) == 0
+    out, err = capsys.readouterr()
+    if command == "run":
+        assert json.loads(out.splitlines()[-1])["status"] == "succeeded"
+        assert all(isinstance(json.loads(line), dict) for line in out.splitlines())
+    else:
+        assert json.loads(out)
+    assert "helper initialized" in err
+
+
+@pytest.mark.parametrize("dry_run", [False, True])
+def test_invalid_calendar_is_reported_without_writing_units(flow, store, sd, capsys, dry_run):
+    flow.write_text(flow.read_text().replace('"hourly"', '"not-a-calendar"'))
+    assert main(["install", str(flow), *(["--dry-run"] if dry_run else [])], store=store, sd=sd) == 1
+    out, err = capsys.readouterr()
+    assert out == "" and "invalid schedule entry 'not-a-calendar'" in err
+    assert not store.path.exists()
+    assert sd.mock_calls == []
 
 
 def test_run_and_reinstall_by_name(flow, store, sd, capsys):

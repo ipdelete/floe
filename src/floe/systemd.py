@@ -8,9 +8,25 @@ from __future__ import annotations
 
 import subprocess
 
-from .model import SystemdError
+from .model import SystemdError, ValidationError
 
 __all__ = ["Systemd", "SystemdError"]
+
+
+def validate_calendars(schedule: tuple[str, ...]) -> None:
+    """Use systemd's calendar parser without contacting the service manager."""
+    problems = []
+    for expression in schedule:
+        command = ["systemd-analyze", "calendar", "--iterations=0", "--", expression]
+        try:
+            result = subprocess.run(command, capture_output=True, text=True, timeout=10)
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise ValidationError([f"cannot validate schedule with systemd-analyze: {exc}"]) from exc
+        if result.returncode:
+            detail = result.stderr.strip() or result.stdout.strip()
+            problems.append(f"invalid schedule entry {expression!r}: {detail}")
+    if problems:
+        raise ValidationError(problems)
 
 
 class Systemd:

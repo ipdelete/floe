@@ -85,6 +85,33 @@ def test_invalid_schedule_iterator_reports_all_errors():
         assert text in problems
 
 
+@pytest.mark.parametrize("kind,task,status", [
+    ("run_started", None, None),
+    ("task_started", "fetch", None),
+    ("task_completed", "fetch", "succeeded"),
+    ("run_completed", None, "failed"),
+])
+def test_event_schema_round_trip(kind, task, status):
+    event = Event(kind, "demo", "a" * 32, "2026-01-01T00:00:00+00:00", task=task, status=status)
+    assert Event.from_dict(event.to_dict()) == event
+
+
+@pytest.mark.parametrize("changes", [
+    {"schema": True}, {"schema": 1.0}, {"schema": 2},
+    {"event": "unknown"}, {"event": []},
+    {"workflow": ""}, {"run_id": ""}, {"timestamp": ""},
+    {"timestamp": "not a date"}, {"timestamp": "2026-01-01T00:00:00"},
+    {"timestamp": "0001-01-01T00:00:00+01:00"},
+    {"event": "task_started"}, {"event": "task_started", "task": ""},
+    {"task": "unexpected"}, {"status": "not-a-status"},
+    {"event": "run_completed"}, {"event": "task_completed", "task": "fetch"},
+    {"error": "unexpected"},
+])
+def test_event_schema_rejects_malformed_records(changes):
+    data = Event("run_started", "demo", "a" * 32, "2026-01-01T00:00:00+00:00").to_dict()
+    assert Event.from_dict({**data, **changes}) is None
+
+
 def test_event_dict_is_stable_schema():
     event = Event("task_completed", "demo", "r1", "2026-01-01T00:00:00+00:00", task="a", status="succeeded")
     assert event.to_dict() == {
