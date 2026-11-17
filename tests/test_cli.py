@@ -104,9 +104,9 @@ def test_install_dry_run_reports_conflicts(flow, store, sd, capsys):
 
 def test_install_and_reinstall(flow, store, sd, capsys):
     assert main(["install", str(flow)], store=store, sd=sd) == 0
-    assert capsys.readouterr().out == "wrote: mydag.service, mydag.timer; enabled mydag.timer\n"
+    assert capsys.readouterr().out == "wrote: mydag.service, mydag.timer; mydag.timer is enabled\n"
     assert main(["install", str(flow)], store=store, sd=sd) == 0
-    assert "nothing (up to date)" in capsys.readouterr().out
+    assert capsys.readouterr().out == "wrote: nothing (up to date); mydag.timer is enabled\n"
 
 
 def test_install_adopt(flow, store, sd, capsys):

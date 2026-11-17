@@ -207,7 +207,8 @@ def _install(args, ctx) -> int:
             print(f"# {change.path} ({change.action}{reason})\n{change.text}")
         return 1 if plan.conflicts else 0
     changed = floe.apply(plan, ctx.store, ctx.sd)
-    print(f"wrote: {', '.join(changed) or 'nothing (up to date)'}; enabled {plan.timer}")
+    # apply always (re-)enables the timer, so report the resulting state, not a change.
+    print(f"wrote: {', '.join(changed) or 'nothing (up to date)'}; {plan.timer} is enabled")
     return 0
 
 
