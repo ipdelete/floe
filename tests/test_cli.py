@@ -279,19 +279,19 @@ def test_default_unit_dir_resolved_at_call_time(flow, tmp_path, sd, capsys, monk
     assert str(tmp_path / "custom" / "systemd" / "user" / "mydag.service") in capsys.readouterr().out
 
 
-def test_console_script_installed(tmp_path):
+def test_console_script_installed(flow, tmp_path):
     env = {**os.environ, "XDG_CONFIG_HOME": str(tmp_path)}
     floe = Path(sys.executable).parent / "floe"
-    r = subprocess.run([str(floe), "install", "--dry-run", str(ROOT / "workflow.py")],
+    r = subprocess.run([str(floe), "install", "--dry-run", str(flow)],
                        capture_output=True, text=True, env=env)
     assert r.returncode == 0, r.stderr
     assert not (tmp_path / "systemd").exists()
 
 
-def test_service_command_runs_with_system_python_and_no_venv(tmp_path):
+def test_service_command_runs_with_system_python_and_no_venv(flow, tmp_path):
     """Exactly what the generated unit runs: system python, PYTHONPATH=src, no site-packages."""
     r = subprocess.run(
-        ["/usr/bin/python3", "-s", "-m", "floe_cli", "run", str(ROOT / "workflow.py")],
+        ["/usr/bin/python3", "-s", "-m", "floe_cli", "run", str(flow)],
         capture_output=True, text=True, cwd=tmp_path,
         env={"PYTHONPATH": str(ROOT / "src"), "PATH": "/usr/bin:/bin"},
     )

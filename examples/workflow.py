@@ -1,7 +1,7 @@
 """Example workflow definition: data only, no runner code.
 
-    floe run workflow.py        # run now, in this process
-    floe install workflow.py    # schedule with systemd
+    floe run examples/workflow.py        # run now, in this process
+    floe install examples/workflow.py    # schedule with systemd
 """
 
 import sys

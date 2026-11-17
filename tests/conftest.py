@@ -4,7 +4,7 @@ import pytest
 def pytest_addoption(parser):
     parser.addoption(
         "--systemd-e2e", action="store_true", default=False,
-        help="clean up, redeploy, and run the real workflow under user systemd",
+        help="deploy and run generated floe-e2e-* workflows under the real user systemd",
     )
 
 

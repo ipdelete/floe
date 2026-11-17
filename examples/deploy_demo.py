@@ -1,4 +1,4 @@
-"""Plan the repository workflow's deployment without writing or calling systemd.
+"""Plan the example workflow's deployment without writing or calling systemd.
 
     uv run python examples/deploy_demo.py
 
@@ -11,7 +11,7 @@ import floe
 
 
 def main():
-    workflow = floe.load(Path(__file__).resolve().parents[1] / "workflow.py")
+    workflow = floe.load(Path(__file__).resolve().parent / "workflow.py")
     plan = floe.plan_install(floe.Deployment.for_workflow(workflow), floe.UnitStore(floe.user_unit_dir()))
     for change in plan.changes:
         print(f"# {change.name}: {change.action}\n{change.text}")

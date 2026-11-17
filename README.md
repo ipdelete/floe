@@ -21,7 +21,7 @@ source .venv/bin/activate   # or prefix commands with `uv run`
 ## Define a workflow
 
 A workflow is a plain Python file containing only definitions. See
-`workflow.py`:
+`examples/workflow.py`:
 
 ```python
 import sys
@@ -68,7 +68,7 @@ to stderr so stdout remains newline-delimited JSON.
 ## Run directly
 
 ```bash
-floe run workflow.py
+floe run examples/workflow.py
 ```
 
 Events are printed to stdout as JSON lines and task messages to stderr. Direct
@@ -86,11 +86,11 @@ The unit files are generated from the workflow file; there are no hand-written
 units to copy.
 
 ```bash
-floe install --dry-run workflow.py   # show each unit file and what would change
-floe install workflow.py             # write units, daemon-reload, enable timer
-floe start mydag                     # run now under systemd, wait for it
-floe status mydag                    # systemd's view of service and timer
-floe uninstall mydag                 # disable, stop, delete the unit files
+floe install --dry-run examples/workflow.py   # show each unit file and what would change
+floe install examples/workflow.py             # write units, daemon-reload, enable timer
+floe start mydag                              # run now under systemd, wait for it
+floe status mydag                             # systemd's view of service and timer
+floe uninstall mydag                          # disable, stop, delete the unit files
 ```
 
 Every command accepts the workflow file or, once installed, the workflow name.
@@ -108,7 +108,7 @@ floe list --json
 
 ```
 NAME   SCHEDULE        TIMER   NEXT                 LAST RUN                       SCRIPT
-mydag  *-*-* *:00:00   active  2026-11-16 14:00:00  2026-11-16 13:53:07 succeeded  ~/src/floe/workflow.py
+mydag  *-*-* *:00:00   active  2026-11-16 14:00:00  2026-11-16 13:53:07 succeeded  ~/src/floe/examples/workflow.py
 etl    *-*-* 00:00:00  active  2026-11-17 00:00:00  2026-11-16 00:00:01 failed     ~/etl/flow.py
   ! script not found: /home/me/etl/flow.py
 ```
@@ -157,7 +157,7 @@ by that protection.
 ## Schedule executions
 
 Set `SCHEDULE` to one or more `OnCalendar=` expressions (see
-`systemd.time(7)`), then run `floe install workflow.py` again. For example,
+`systemd.time(7)`), then run `floe install <file>` again. For example,
 `SCHEDULE = ["*-*-* 08:00:00"]` runs daily at 08:00 local time. Check an
 expression with `systemd-analyze calendar "<expression>"`.
 
@@ -249,7 +249,7 @@ Use the library directly:
 ```python
 import floe
 
-workflow = floe.load("workflow.py")
+workflow = floe.load("examples/workflow.py")
 floe.run(workflow, on_event=lambda event: print(event.to_dict()))
 
 plan = floe.plan_install(floe.Deployment.for_workflow(workflow), floe.UnitStore(floe.user_unit_dir()))
@@ -264,29 +264,29 @@ for past in floe.list_runs("mydag", floe.Journal(), floe.Systemd(), limit=5):
 
 ```bash
 uv run pytest -q
-uv run python examples/deploy_demo.py  # plan a deployment without writing or calling systemd
+uv run python examples/deploy_demo.py  # plan the example's deployment without writing or calling systemd
 ```
 
 Normal tests use temporary directories and mock the service manager. History
 tests use journal records captured from real systemd (`tests/fixtures`). When
 available, `systemd-analyze verify` also checks generated units without installing
 them. A test runs the exact service command with the system Python and no
-virtual environment.
+virtual environment, and `tests/test_examples.py` keeps the examples working.
 
-To test the real deployment lifecycle in your user systemd session:
+To test against your real user systemd session and journald:
 
 ```bash
 uv run pytest -q -m systemd_e2e --systemd-e2e
 ```
 
-**This is opt-in and uses disposable units in your real user systemd session.**
-It runs the `floe` command to uninstall any existing owned workflow units,
-verify cleanup, deploy them, check idempotency, run the actual tasks, and check
-their JSON events in journald and in `floe runs`/`floe logs`. A `finally` block uninstalls the service and
-timer and verifies that the units and enable links are gone, even if a test
-assertion or the uninstall itself fails. There are no backups or restored
-installations. It refuses foreign or masked units and an existing service
-pointing at a different script; unrelated units are untouched. Run it only when
-it is safe to interrupt and execute the tasks in `workflow.py`. Like any cleanup
-code, it cannot guarantee removal after SIGKILL or a systemd failure;
-`floe uninstall mydag` can clean up an interrupted test.
+This is opt-in and takes about 20 seconds. Each test generates its own workflow,
+named `floe-e2e-<random>`, in a temporary directory, deploys it with the real
+`floe` command, and uninstalls it afterward, verifying that no unit files,
+enable links, loaded units, or timer stamps remain. The tests cover deployment
+and idempotent reinstall, history and logs of successful, failed, invalid,
+timed-out, running, and stopped runs, overlapping starts, schedule drift,
+missing definition files, interrupted uninstalls, foreign and masked units, and
+the timer starting runs. They execute only their own generated tasks and touch
+no other units. Leftover `floe-e2e-*` units from an interrupted session (for
+example after SIGKILL) are removed when the tests start, and can be removed by
+hand with `floe uninstall <name>`.
