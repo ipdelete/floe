@@ -1,3 +1,8 @@
+import os
+import subprocess
+
+import pytest
+
 from floe.model import Workflow
 from floe.runner import run
 
@@ -58,3 +63,41 @@ def test_run_ids(monkeypatch):
     events, on_event = collect()
     run(workflow, on_event, run_id="explicit")
     assert {e.run_id for e in events} == {"explicit"}
+
+
+def test_tasks_and_child_processes_see_the_run_id(monkeypatch):
+    monkeypatch.delenv("FLOE_RUN_ID", raising=False)
+    seen = {}
+
+    def task():
+        seen["task"] = os.environ.get("FLOE_RUN_ID")
+        seen["child"] = subprocess.run(["sh", "-c", 'printf %s "$FLOE_RUN_ID"'],
+                                       capture_output=True, text=True, check=True).stdout
+
+    events, on_event = collect()
+    run(Workflow("test", {"task": task}, {"task": set()}), on_event, run_id="explicit-id")
+    assert seen == {"task": "explicit-id", "child": "explicit-id"}
+    assert {e.run_id for e in events} == {"explicit-id"}
+
+
+@pytest.mark.parametrize("previous", [None, "outer-run"])
+@pytest.mark.parametrize("outcome", ["succeeds", "fails", "interrupted"])
+def test_run_id_variable_is_restored(monkeypatch, previous, outcome):
+    if previous is None:
+        monkeypatch.delenv("FLOE_RUN_ID", raising=False)
+    else:
+        monkeypatch.setenv("FLOE_RUN_ID", previous)
+
+    def task():
+        if outcome == "fails":
+            raise ValueError("broken")
+        if outcome == "interrupted":
+            raise KeyboardInterrupt
+
+    workflow = Workflow("test", {"task": task}, {"task": set()})
+    events, on_event = collect()
+    try:
+        run(workflow, on_event, run_id="inner-run")
+    except KeyboardInterrupt:
+        assert outcome == "interrupted"
+    assert os.environ.get("FLOE_RUN_ID") == previous

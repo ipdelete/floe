@@ -92,6 +92,10 @@ UTC timestamp, and run ID. The run ID uses systemd's `INVOCATION_ID` when
 available, otherwise a generated UUID. An invalid definition fails before
 `run_started`, so it produces an error message but no events.
 
+While a run executes, the environment variable `FLOE_RUN_ID` holds its run ID,
+for tasks and the child processes they start. Use it to label files or records
+that a run produces; under systemd it matches the ID that `floe runs` shows.
+
 ## Deploy with systemd
 
 The unit files are generated from the workflow file; there are no hand-written
