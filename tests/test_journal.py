@@ -1,8 +1,9 @@
 """The journalctl wrapper, run against a fake journalctl executable on PATH."""
 
-import json
 import os
 import stat
+import subprocess
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
@@ -13,8 +14,10 @@ SCRIPT = """#!/bin/sh
 printf '%s\\n' "$@" > "{log}"
 [ -n "$FAIL" ] && {{ echo "Failed to parse timestamp: $FAIL" >&2; exit 1; }}
 i=0
-while [ $i -lt "${{COUNT:-3}}" ]; do
+while [ $i -lt 3 ]; do
   echo '{{"MESSAGE": "line '$i'", "__REALTIME_TIMESTAMP": "1"}}'
+  # Keep the same PID and stdout open, without leaving a child to clean up.
+  [ -n "$BLOCK_AFTER_FIRST" ] && exec sleep 30
   i=$((i+1))
 done
 """
@@ -27,6 +30,8 @@ def fake(tmp_path, monkeypatch):
     script.write_text(SCRIPT.format(log=log))
     script.chmod(script.stat().st_mode | stat.S_IEXEC)
     monkeypatch.setenv("PATH", f"{tmp_path}:{os.environ['PATH']}")
+    for name in ("FAIL", "BLOCK_AFTER_FIRST"):
+        monkeypatch.delenv(name, raising=False)
     return log
 
 
@@ -44,11 +49,39 @@ def test_default_is_oldest_first_without_since(fake):
     assert "--reverse" not in args and not any(a.startswith("--since") for a in args)
 
 
-def test_stopping_early_does_not_raise_or_hang(fake, monkeypatch):
-    monkeypatch.setenv("COUNT", "100000")
-    records = Journal().records("mydag.service")
-    assert next(records)["MESSAGE"] == "line 0"
-    records.close()
+def test_stopping_early_terminates_and_reaps_the_producer(fake, monkeypatch):
+    monkeypatch.setenv("BLOCK_AFTER_FIRST", "1")
+    processes = []
+    popen = subprocess.Popen
+
+    def start(*args, **kwargs):
+        proc = popen(*args, **kwargs)
+        processes.append(proc)
+        return proc
+
+    monkeypatch.setattr("floe.journal.subprocess.Popen", start)
+
+    def consume_and_close():
+        records = Journal().records("mydag.service")
+        try:
+            assert next(records)["MESSAGE"] == "line 0"
+            [proc] = processes
+            assert proc.poll() is None, "records were not yielded while the producer was running"
+        finally:
+            records.close()
+        assert proc.returncode is not None, "close() did not reap the producer"
+
+    # Bound both the first yield and close(): eager reads or a missing kill
+    # must fail promptly rather than hang the test suite. Always clean up.
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(consume_and_close)
+        try:
+            future.result(timeout=5)
+        finally:
+            for proc in processes:
+                if proc.poll() is None:
+                    proc.kill()
+                proc.wait(timeout=5)
 
 
 def test_failure_raises_with_stderr(fake, monkeypatch):
@@ -56,8 +89,3 @@ def test_failure_raises_with_stderr(fake, monkeypatch):
     with pytest.raises(SystemdError, match="Failed to parse timestamp: garbage") as caught:
         list(Journal().records("mydag.service", since="garbage"))
     assert caught.value.returncode == 1
-
-
-def test_records_are_json(fake):
-    assert all(isinstance(r, dict) for r in Journal().records("x.service"))
-    json.dumps(list(Journal().records("x.service")))

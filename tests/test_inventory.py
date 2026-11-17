@@ -8,6 +8,7 @@ from journal_fakes import FakeJournal, Run
 
 from floe.deploy import PACKAGE_ROOT, Deployment, install
 from floe.inventory import check_installed, find_installed, list_installed, overview
+from floe.journal import Journal
 from floe.model import NotFoundError, SystemdError
 from floe.store import UnitStore
 from floe.systemd import Systemd
@@ -43,6 +44,12 @@ def deploy(tmp_path, store, sd, name="mydag", schedule="hourly"):
 def test_list_installed_reads_metadata_only(tmp_path, store, sd):
     first = deploy(tmp_path, store, sd, "b-flow")
     second = deploy(tmp_path, store, sd, "a-flow")
+    executed = tmp_path / "definition-executed"
+    for script in (first, second):
+        script.write_text(
+            f'from pathlib import Path\nPath({str(executed)!r}).touch()\n'
+            'raise RuntimeError("listing must not execute definitions")\n'
+        )
     (store.path / "foreign.service").write_text("[Service]\nExecStart=/bin/true\n")
     (store.path / "masked.timer").symlink_to("/dev/null")
     sd.reset_mock()
@@ -50,10 +57,11 @@ def test_list_installed_reads_metadata_only(tmp_path, store, sd):
     assert [(w.name, w.script, w.problems) for w in found] == [("a-flow", second, ()), ("b-flow", first, ())]
     assert found[0].service == store.path / "a-flow.service" and found[0].timer == store.path / "a-flow.timer"
     assert sd.mock_calls == []
+    assert not executed.exists()
     assert list_installed(UnitStore(tmp_path / "absent")) == []
 
 
-def test_problems_found_without_running_code(tmp_path, store, sd):
+def test_missing_unit_and_script_are_reported(tmp_path, store, sd):
     script = deploy(tmp_path, store, sd)
     (store.path / "mydag.timer").unlink()
     script.unlink()
@@ -115,18 +123,42 @@ def test_overview(tmp_path, store, sd):
     assert data["name"] == "mydag" and data["last_run"]["status"] == "succeeded"
 
 
-def test_overview_reports_inactive_timer_and_errors_per_workflow(tmp_path, store, sd):
+@pytest.mark.parametrize("failure", ["systemd", "journal"])
+def test_overview_reports_inactive_timer_and_errors_per_workflow(tmp_path, store, sd, failure):
     script = deploy(tmp_path, store, sd)
+    active_props = list(sd.show_all.return_value)
     sd.show_all.return_value = [("UnitFileState", "disabled"), ("ActiveState", "inactive")]
     [summary] = overview(store, sd, FakeJournal([]))
     assert summary.problems == ("timer is inactive",)
     assert summary.last_run is None and summary.next_run is None
 
-    sd.show_all.side_effect = SystemdError(["systemctl"], 1, "no session")
+    deploy(tmp_path, store, sd, name="z-healthy")
     script.write_text(DEFINITION.format(name="mydag", schedule="daily"))
-    [summary] = overview(store, sd, FakeJournal([]), verify=True)
-    assert summary.problems[0] == "units out of date (mydag.timer); reinstall"
-    assert "no session" in summary.problems[1]
+
+    def show_timer(unit, *props, **kwargs):
+        if failure == "systemd" and unit == "mydag.timer":
+            raise SystemdError(["systemctl"], 1, "no session")
+        return active_props
+
+    def records(unit, **kwargs):
+        if failure == "journal" and unit == "mydag.service":
+            raise SystemdError(["journalctl"], 1, "journal unavailable")
+        return iter(())
+
+    sd.show_all.side_effect = show_timer
+    journal = create_autospec(Journal, instance=True)
+    journal.records.side_effect = records
+    summaries = overview(store, sd, journal, verify=True)
+    assert [summary.name for summary in summaries] == ["mydag", "z-healthy"]
+    broken, healthy = summaries
+    assert broken.problems[0] == "units out of date (mydag.timer); reinstall"
+    assert ("no session" if failure == "systemd" else "journal unavailable") in broken.problems[1]
+    assert healthy.problems == ()
+    assert healthy.enabled and healthy.active
+    assert healthy.schedule == ("*-*-* *:00:00", "*-*-* 08:00:00")
+    assert healthy.next_run.timestamp() == 1794855600
+    assert healthy.last_run is None
+    assert journal.records.call_args.args == ("z-healthy.service",)
 
 
 def test_metadata_recorded_in_both_units(tmp_path, store, sd):

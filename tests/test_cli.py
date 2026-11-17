@@ -75,6 +75,16 @@ def test_invalid_definition_lists_every_problem(tmp_path, capsys):
     assert "\n  - task 'a' is not callable" in err and "Traceback" not in err
 
 
+def test_unhashable_prerequisites_are_a_validation_error(tmp_path, capsys):
+    path = tmp_path / "flow.py"
+    path.write_text('WORKFLOW = "demo"\ntasks = {"a": lambda: None}\ndag = {"a": [["b"]]}\n')
+    assert main(["run", str(path)]) == 1
+    out, err = capsys.readouterr()
+    assert out == ""
+    assert "error: invalid workflow:" in err and "nonempty strings" in err
+    assert "Traceback" not in err
+
+
 def test_install_dry_run_prints_exact_files(flow, store, sd, capsys):
     assert main(["install", "--dry-run", str(flow)], store=store, sd=sd) == 0
     out = capsys.readouterr().out
@@ -126,6 +136,14 @@ def test_uninstall_reports_partial_failure(flow, store, sd, capsys):
     assert "stop timed out" in err and "rerun uninstall" in err and "Traceback" not in err
 
 
+def test_uninstall_without_files_reports_manager_query_failure(store, sd, capsys):
+    sd.show.side_effect = SystemdError(["systemctl", "show"], 1, "cannot connect to bus")
+    assert main(["uninstall", "mydag"], store=store, sd=sd) == 1
+    out, err = capsys.readouterr()
+    assert out == "removed: nothing\n"
+    assert "cannot connect to bus" in err and "rerun uninstall" in err
+
+
 def test_start_and_status(store, sd, capsys):
     assert main(["start", "mydag"], store=store, sd=sd) == 0
     assert sd.mock_calls == [call.start("mydag.service", wait=True)]
@@ -175,11 +193,19 @@ def history_journal():
 
 def test_runs_table(sd, capsys):
     sd.show.return_value = {"ActiveState": "inactive"}
-    assert main(["runs", "mydag", "--since", "today", "-n", "5"], sd=sd, journal=history_journal()) == 0
+    journal = history_journal()
+    assert main(["runs", "mydag", "--since", "today", "-n", "5"], sd=sd, journal=journal) == 0
+    assert journal.calls == [("mydag.service", "today", True)]
     lines = capsys.readouterr().out.splitlines()
     assert lines[0].split() == ["RUN", "STARTED", "STATUS", "DURATION", "DETAIL"]
     assert lines[1].startswith("bbbbbbbb ") and "failed" in lines[1] and lines[1].endswith("fetch: broken input")
     assert lines[2].startswith("aaaaaaaa ") and "succeeded" in lines[2]
+    assert len(lines) == 3
+
+    assert main(["runs", "mydag", "-n", "1"], sd=sd, journal=journal) == 0
+    limited = capsys.readouterr().out.splitlines()
+    assert [line.split() for line in limited] == [line.split() for line in lines[:2]]
+    assert journal.calls[-1] == ("mydag.service", None, True)
 
 
 def test_runs_json_and_empty(sd, capsys):

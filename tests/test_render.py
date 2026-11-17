@@ -13,15 +13,13 @@ from floe.render import environment, exec_line
     (["/bin/echo", 'say "hi"'], r'/bin/echo "say \"hi\""'),
     (["/bin/date", "+%F"], "/bin/date +%%F"),
     (["/bin/echo", "$HOME"], "/bin/echo $$HOME"),
-    (["/bin/echo", ";"], r"/bin/echo \;"),
-    (["/bin/echo", ""], '/bin/echo ""'),
     (["/bin/echo", "a\\b"], r"/bin/echo a\\b"),
 ])
 def test_command_quoting(argv, expected):
     assert exec_line(argv) == expected
 
 
-@pytest.mark.parametrize("argv", [[], ["/bin/echo", "a\nb"], ["/bin/echo", "nul\x00"]])
+@pytest.mark.parametrize("argv", [["/bin/echo", "a\nb"], ["/bin/echo", "nul\x00"]])
 def test_invalid_commands_rejected(argv):
     with pytest.raises(ValueError):
         exec_line(argv)

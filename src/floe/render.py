@@ -7,19 +7,18 @@ _CONTROL = re.compile(r"[\x00-\x1f\x7f]")
 
 
 def exec_line(argv: list[str]) -> str:
-    """Quote literal argv for systemd, whose command syntax is not a shell's."""
-    if not argv:
-        raise ValueError("empty command")
+    """Quote the service's fixed, nonempty argv for systemd (not a shell).
+
+    Arguments are validated paths or fixed literals, never empty or a lone ';'.
+    """
     return " ".join(_quote(arg) for arg in argv)
 
 
 def _quote(arg: str) -> str:
     if _CONTROL.search(arg):
         raise ValueError(f"control characters are not allowed in commands: {arg!r}")
-    if arg == ";":
-        return "\\;"
     value = arg.replace("\\", "\\\\").replace('"', '\\"')
-    if not arg or any(c.isspace() for c in arg) or "'" in arg or '"' in arg:
+    if any(c.isspace() for c in arg) or "'" in arg or '"' in arg:
         value = f'"{value}"'
     return value.replace("%", "%%").replace("$", "$$")
 

@@ -157,10 +157,11 @@ _RUNNING = ("active", "activating", "deactivating", "reloading", "refreshing")
 def uninstall(workflow: str, store: UnitStore, sd: Systemd) -> list[str]:
     """Best effort: attempt every step, then verify, then report all failures.
 
-    A unit is ours if its file is owned, or if the file is gone but systemd
-    still has it loaded from our path (an earlier uninstall was interrupted).
-    Foreign, masked, or linked files and same-named units elsewhere are left alone.
-    Rerunning after a failure continues where the previous attempt stopped.
+    Owned files can be removed independently of loaded-unit ownership. Lifecycle
+    operations require a fragment from our store (or an owned file whose unit is
+    not loaded). Missing files may still have stale loaded units from an earlier
+    interrupted uninstall. Foreign, masked, or linked files and same-named units
+    loaded elsewhere are left alone. Rerunning continues an interrupted attempt.
     """
     service, timer = unit_names(workflow)
     names = (timer, service)
@@ -174,28 +175,35 @@ def uninstall(workflow: str, store: UnitStore, sd: Systemd) -> list[str]:
             errors.append(str(exc))
             return False
 
-    def loaded_from_store(name: str) -> bool:
-        try:
-            props = sd.show(name, "LoadState", "FragmentPath")
-        except SystemdError as exc:
-            errors.append(str(exc))
-            return False
-        return props.get("LoadState") != "not-found" and store.owns_path(name, props.get("FragmentPath", ""))
-
     owned = {name for name in names if store.is_owned(name)}
     present = {name for name in names if (store.path / name).exists() or (store.path / name).is_symlink()}
-    stale = {name for name in names if name not in present and loaded_from_store(name)}
-    ours = [name for name in names if name in owned or name in stale]
+    managed = set()
+    for name in names:
+        if name in present and name not in owned:
+            continue
+        try:
+            props = sd.show(name, "LoadState", "FragmentPath")
+        except (OSError, SystemdError) as exc:
+            errors.append(str(exc))
+            continue  # unknown ownership: remove our files, but do not stop a unit
+        fragment = props.get("FragmentPath", "")
+        if store.owns_path(name, fragment) or (
+            not fragment and props.get("LoadState") == "not-found" and name in owned
+        ):
+            managed.add(name)
+    ours = [name for name in names if name in owned or name in managed]
 
-    # Stop new activations first, then the current run.
-    if timer in owned:
-        if not attempt(sd.disable, timer, now=True):
+    # Stop new activations first, then the current run. An owned file alone
+    # must not authorize stopping a same-named fragment loaded from elsewhere.
+    if timer in managed:
+        if timer in owned:
+            if not attempt(sd.disable, timer, now=True):
+                attempt(sd.stop, timer, missing_ok=True)
+        else:
             attempt(sd.stop, timer, missing_ok=True)
-    elif timer in stale:
-        attempt(sd.stop, timer, missing_ok=True)
-    if service in ours:
+    if service in managed:
         attempt(sd.stop, service, missing_ok=True)
-    if timer in ours:
+    if timer in managed:
         # Forget when it last fired: otherwise a later install with
         # Persistent=true runs the workflow at once to "catch up".
         attempt(sd.clean_state, timer)
@@ -211,13 +219,15 @@ def uninstall(workflow: str, store: UnitStore, sd: Systemd) -> list[str]:
             attempt(store.remove_links, name)  # dangling links from an interrupted run
 
     if not ours:
+        if errors:
+            raise UninstallError(removed, errors)
         return removed
     attempt(sd.daemon_reload)
 
     def state(name: str) -> dict[str, str] | None:
         try:
             props = sd.show(name, "LoadState", "ActiveState", "FragmentPath")
-        except SystemdError as exc:
+        except (OSError, SystemdError) as exc:
             errors.append(str(exc))
             return None
         fragment = props.get("FragmentPath", "")

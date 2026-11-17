@@ -137,11 +137,15 @@ def _build_run(workflow: str, invocation: str, records: list[dict], running: boo
     started = completed = None
     output: list[str] = []
     terminal_time = result = None
+    failed = False
     for record in records:
         if _from_systemd(record):
             if record.get("MESSAGE_ID") in _TERMINAL:
                 terminal_time = _time(record)
             result = record.get("UNIT_RESULT") or result
+            failed |= (record.get("MESSAGE_ID") in (_JOB_FAILED, _UNIT_FAILED)
+                       or record.get("JOB_RESULT") == "failed"
+                       or record.get("UNIT_RESULT") not in (None, "", "success"))
             continue
         event = _event(record, invocation)
         if event is None:
@@ -167,10 +171,10 @@ def _build_run(workflow: str, invocation: str, records: list[dict], running: boo
     elif started:
         status, finished = "incomplete", terminal_time
         error = "run ended without completing" + (f" (systemd result: {result})" if result else "")
-    elif terminal_time is not None:
+    elif terminal_time is not None and failed and not tasks:
         status, finished, error = "failed", terminal_time, _error_output(output, result)
     else:
-        status, finished, error = "incomplete", None, "no completion recorded"
+        status, finished, error = "incomplete", terminal_time, "no completion recorded"
     if status != "running":
         for task in tasks.values():
             if task["status"] == "running":

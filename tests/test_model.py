@@ -30,6 +30,10 @@ def test_valid_workflow_is_frozen_and_ordered():
     ({123: noop}, {123: set()}, ["nonempty strings"]),
     ({"a": None}, {"a": set()}, ["'a' is not callable"]),
     ({"a": noop}, {"a": "b"}, ["must be a set"]),
+    ({"a": noop}, {"a": [["b"]]}, ["nonempty strings"]),
+    ({"a": noop}, {"a": [{"b": 1}]}, ["nonempty strings"]),
+    ({"a": noop}, {"a": [set()]}, ["nonempty strings"]),
+    ({"a": noop}, {"a": [123, ""]}, ["nonempty strings"]),
     ("tasks", {}, ["tasks must be a mapping"]),
 ])
 def test_invalid_graphs(tasks, dag, expected):
@@ -39,11 +43,11 @@ def test_invalid_graphs(tasks, dag, expected):
         assert any(text in problem for problem in caught.value.problems), caught.value.problems
 
 
-def test_all_problems_reported_together():
+def test_bad_prerequisites_do_not_hide_other_validation_errors():
     with pytest.raises(ValidationError) as caught:
-        Workflow("bad/name", {"a": None}, {"a": {"unknown"}}, "hourly")
+        Workflow("bad/name", {"a": None}, {"a": [["b"], "missing"]}, "hourly")
     problems = " | ".join(caught.value.problems)
-    for text in ("workflow name", "schedule", "not callable", "unknown prerequisites"):
+    for text in ("workflow name", "schedule", "not callable", "nonempty strings", "unknown prerequisites"):
         assert text in problems
     assert isinstance(caught.value, ValueError)
 

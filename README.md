@@ -50,7 +50,10 @@ dag = {
 ```
 
 `WORKFLOW`, `tasks` and `dag` are required. `SCHEDULE` is optional for running
-directly and required for installing. Modules next to the file are importable.
+directly and required for installing. Modules next to the file are importable,
+including from inside tasks. Each load keeps its own sibling-module cache, so
+separate workflows can use the same helper-module names without sharing code
+or state.
 
 Every task must appear in the DAG, including tasks with no prerequisites.
 Task names must be nonempty strings. Workflow names must be 1–247 ASCII
@@ -243,6 +246,10 @@ The rules, enforced by `tests/test_boundaries.py`:
   raises `FloeError` subclasses with structured fields.
 - UIs use only the public API exported by `floe` (`floe.__all__`).
 - Everything is standard library only.
+
+Workflow loading and task execution temporarily change Python's process-global
+import state. Use them serially, not concurrently with other threads importing
+same-named sibling modules.
 
 Use the library directly:
 

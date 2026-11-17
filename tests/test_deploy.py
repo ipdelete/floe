@@ -265,6 +265,44 @@ def test_uninstall_ignores_same_named_units_loaded_elsewhere(dep, tmp_path, sd):
     assert {c[0] for c in sd.mock_calls} == {"show"}
 
 
+def test_uninstall_removes_owned_files_without_stopping_foreign_loaded_units(dep, tmp_path, sd):
+    store = UnitStore(tmp_path / "units")
+    install(dep, store, sd)
+    sd.reset_mock()
+    sd.show.side_effect = lambda name, *props: {
+        "LoadState": "loaded", "ActiveState": "active",
+        "FragmentPath": f"/elsewhere/{name}"}
+
+    assert uninstall(dep.workflow, store, sd) == [dep.timer_name, dep.service_name]
+    assert list(store.path.iterdir()) == []
+    sd.disable.assert_not_called()
+    sd.stop.assert_not_called()
+    sd.clean_state.assert_not_called()
+    sd.reset_failed.assert_not_called()
+    sd.daemon_reload.assert_called_once()
+
+
+@pytest.mark.parametrize("files_exist", [False, True])
+@pytest.mark.parametrize("error", [
+    SystemdError(["systemctl", "show"], 1, "cannot connect to bus"),
+    FileNotFoundError("systemctl not found"),
+])
+def test_uninstall_reports_manager_query_failure(dep, tmp_path, sd, files_exist, error):
+    store = UnitStore(tmp_path / "units")
+    if files_exist:
+        install(dep, store, sd)
+    sd.reset_mock()
+    sd.show.side_effect = error
+
+    with pytest.raises(UninstallError) as caught:
+        uninstall(dep.workflow, store, sd)
+    assert str(error) in str(caught.value)
+    assert caught.value.removed == ([dep.timer_name, dep.service_name] if files_exist else [])
+    sd.disable.assert_not_called()
+    sd.stop.assert_not_called()
+    sd.clean_state.assert_not_called()
+
+
 def test_uninstall_reports_service_still_running(dep, tmp_path, sd):
     store = UnitStore(tmp_path / "units")
     install(dep, store, sd)

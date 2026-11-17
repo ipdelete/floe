@@ -120,8 +120,15 @@ class Workflow:
             problems.append("dag must be a mapping of task names to prerequisite sets")
         order: tuple[str, ...] = ()
         if tasks is not None and dag is not None:
-            dag = {name: frozenset(deps) if isinstance(deps, Iterable) and not isinstance(deps, str) else deps
-                   for name, deps in dag.items()}
+            for name, deps in dag.items():
+                if isinstance(deps, Iterable) and not isinstance(deps, str):
+                    valid = set()
+                    for dep in deps:
+                        if not isinstance(dep, str) or not dep:
+                            problems.append(f"prerequisites of {name!r} must be nonempty strings: {dep!r}")
+                        else:
+                            valid.add(dep)
+                    dag[name] = frozenset(valid)
             problems += _graph_problems(tasks, dag)
             if not problems:
                 try:

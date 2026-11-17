@@ -65,6 +65,47 @@ def test_failure_before_run_started_uses_error_output(sd):
     assert run.error == "invalid workflow:\n  - task 'a' is not callable"
 
 
+@pytest.mark.parametrize("message_id,fields", [
+    ("be02cf6855d2428ba40df7e9d022f03d", {}),
+    ("39f53479d3a045ac8e11786248231fbf", {"JOB_RESULT": "failed"}),
+    ("d9b373ed55a64feb8242e02dbe79a49c", {"UNIT_RESULT": "exit-code"}),
+])
+def test_explicit_manager_failure_without_run_events_is_failed(sd, message_id, fields):
+    r = Run("a" * 32).output("error: could not start")
+    r.systemd("Failed", MESSAGE_ID=message_id, **fields)
+    [run] = list_runs("mydag", FakeJournal(r.records), sd)
+    assert (run.status, run.error, run.tasks) == ("failed", "could not start", ())
+
+
+def test_task_evidence_without_run_events_is_incomplete_on_failure(sd):
+    r = Run("a" * 32).event("task_started", task="fetch").failed()
+    [run] = list_runs("mydag", FakeJournal(r.records), sd)
+    assert run.status == "incomplete"
+    assert run.tasks[0].status == "incomplete"
+    assert run.finished is not None
+
+
+@pytest.mark.parametrize("keep_tasks", [False, True])
+@pytest.mark.parametrize("terminal", ["finished", "stopped", "success"])
+def test_successful_terminal_without_run_events_is_incomplete(sd, keep_tasks, terminal):
+    r = Run("a" * 32)
+    if keep_tasks:
+        r.event("task_started", task="fetch").event("task_completed", task="fetch", status="succeeded")
+    if terminal == "finished":
+        r.finished()
+    elif terminal == "stopped":
+        r.systemd("Stopped mydag.service", MESSAGE_ID="39f53479d3a045ac8e11786248231fbf",
+                  JOB_TYPE="stop", JOB_RESULT="done")
+    else:
+        r.systemd("Deactivated successfully", MESSAGE_ID="7ad2d189f7e94e70a38c781354912448",
+                  UNIT_RESULT="success")
+    [run] = list_runs("mydag", FakeJournal(r.records), sd)
+    assert run.status == "incomplete"
+    assert run.error == "no completion recorded"
+    assert run.finished is not None
+    assert run.to_dict()["status"] == "incomplete"
+
+
 def test_running_and_vanished_runs(sd):
     r = Run("c" * 32).starting().event("run_started").event("task_started", task="fetch")
     sd.show.return_value = {"ActiveState": "active", "InvocationID": "c" * 32}
