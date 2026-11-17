@@ -18,8 +18,23 @@ uv sync                # installs the `floe` command into .venv
 source .venv/bin/activate   # or prefix commands with `uv run`
 ```
 
+## Quickstart
+
+```bash
+floe run examples/workflow.py        # run directly: events on stdout, task output on stderr
+floe install examples/workflow.py    # write a systemd service and timer for workflow "mydag"
+floe start mydag                     # run it under systemd now
+floe runs mydag                      # its history, from journald
+floe logs mydag                      # events and output of the latest run
+floe uninstall mydag
+```
+
+The [quickstart](docs/quickstart.md) walks through writing a workflow,
+installing it, and watching its timer start a run.
+
 ## Documentation
 
+- [Quickstart](docs/quickstart.md): from a first workflow to scheduled runs
 - [Workflows](docs/workflows.md): define, run, and write workflows that run unattended
 - [Deployment](docs/deployment.md): install, list, uninstall, the service environment, schedules
 - [History](docs/history.md): runs and logs from journald
