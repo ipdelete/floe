@@ -1,6 +1,11 @@
+import json
+from dataclasses import replace
+from datetime import UTC, datetime
+from types import MappingProxyType
+
 import pytest
 
-from floe.model import Event, ValidationError, Workflow
+from floe.model import Event, InstalledWorkflow, UnitState, ValidationError, Workflow, WorkflowSummary
 
 
 def noop():
@@ -120,3 +125,26 @@ def test_event_dict_is_stable_schema():
     }
     assert list(Event("run_started", "demo", "r1", "t").to_dict()) == [
         "schema", "event", "workflow", "run_id", "timestamp"]
+
+
+def test_timer_state_json_is_additive_and_legacy_positional_arguments_keep_their_meaning():
+    installed = InstalledWorkflow("demo", None, None, None)
+    when = datetime(2026, 11, 17, tzinfo=UTC)
+    # All eight pre-existing arguments stay in their original positions.
+    legacy = WorkflowSummary(installed, ("hourly",), False, True, when, None, None, ("problem",))
+    expected = {
+        "name": "demo", "script": None, "service": None, "timer": None,
+        "schedule": ["hourly"], "enabled": False, "active": True,
+        "next_run": "2026-11-17T00:00:00+00:00", "last_trigger": None, "last_run": None,
+        "problems": ["problem"], "timer_state": None,
+    }
+    assert json.loads(json.dumps(legacy.to_dict())) == expected
+    state = UnitState("demo.timer", MappingProxyType({
+        "ActiveState": "active", "UnitFileState": "enabled-runtime", "TimersCalendar": "hourly"}))
+    summary = replace(legacy, timer_state=state)
+    assert json.loads(json.dumps(summary.to_dict())) == {
+        **expected, "timer_state": {
+            "name": "demo.timer", "properties": {
+                "ActiveState": "active", "UnitFileState": "enabled-runtime", "TimersCalendar": "hourly"},
+        },
+    }

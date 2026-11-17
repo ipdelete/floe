@@ -1,8 +1,10 @@
 """Read-only pages and real loopback HTTP; never contacts a service manager."""
 
 import http.client
+import json
 import threading
 import time
+from datetime import datetime, timedelta, timezone
 from html.parser import HTMLParser
 from unittest.mock import create_autospec
 
@@ -91,6 +93,28 @@ def test_three_pages_and_links_are_read_only_metadata(app, monkeypatch):
     assert 1001 in app.journal.limits
 
 
+def test_web_data_sources_supply_aware_utc_times(app):
+    app.sd.show_all.return_value += [("LastTriggerUSec", "@1799999000")]
+    # Event wall times may carry non-UTC offsets; journald uses epoch microseconds.
+    offset = timezone(timedelta(hours=5, minutes=30))
+    for record in app.journal.records_list:
+        if record["MESSAGE"].startswith("{"):
+            event = json.loads(record["MESSAGE"])
+            event["timestamp"] = datetime.fromisoformat(event["timestamp"]).astimezone(offset).isoformat()
+            record["MESSAGE"] = json.dumps(event)
+    summary = app.summaries()[0]
+    logs = floe.run_logs("mydag", "a" * 32, app.journal, app.sd)
+    assert summary.next_run.timestamp() == 1800000000
+    assert summary.last_trigger.timestamp() == 1799999000
+    assert len(logs.run.tasks) == 2 and logs.lines
+    times = [summary.next_run, summary.last_trigger, summary.last_run.started, summary.last_run.finished,
+             logs.run.started, logs.run.finished]
+    for task in logs.run.tasks:
+        times.extend((task.started, task.finished))
+    times.extend(line.timestamp for line in logs.lines)
+    assert all(value is not None and value.utcoffset() == timedelta(0) for value in times)
+
+
 def test_logs_errors_and_problems_are_escaped(app):
     r = Run("b" * 32).event("run_started").event("task_started", task='<img src=x onerror="bad()">')
     r.output('<script>alert("bad")</script>')
@@ -171,11 +195,30 @@ def test_transient_detail_error_retries_same_route_and_can_recover(app):
 
 
 @pytest.mark.parametrize("path", ["//attacker.example", "/\\\\attacker.example", "/workflows/<script>",
-                                 "https://attacker.example/", "/workflows/x/runs/bad"])
+                                 "https://attacker.example/", "/workflows/x/runs/bad",
+                                 *("/workflows/x/runs/" + run_id for run_id in
+                                   ("a" * 31, "a" * 33, "g" * 32, "A" * 32))])
 def test_error_retry_links_never_escape_validated_local_routes(app, path):
     source = app.error(503, "<img src=x>", path=path).body.decode()
     assert set(Links(source).links) == {"#content", "/"}
     assert "&lt;img src=x&gt;" in source and "<img" not in source
+    assert not app.sd.mock_calls and not app.journal.calls
+
+
+@pytest.mark.parametrize("name", ["report.py", "a" * 247])
+def test_retry_links_and_cli_hints_preserve_valid_edge_case_names(app, name):
+    from shlex import split
+
+    run_id = "0123456789abcdef" * 2
+    path = f"/workflows/{name}/runs/{run_id}"
+    source = app.error(503, "temporarily unavailable", path=path).body.decode()
+    assert Links(source).links.count(path) == 2
+    commands = source.split("<pre>", 1)[1].split("</pre>", 1)[0].splitlines()
+    assert [split(command) for command in commands] == [
+        ["floe", "status", "--name", name],
+        ["floe", "runs", "--name", name],
+        ["floe", "logs", "--name", name, run_id],
+    ]
     assert not app.sd.mock_calls and not app.journal.calls
 
 

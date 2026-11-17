@@ -26,8 +26,17 @@ The web UI never loads workflow definitions and has no write routes. See
 when the timer query failed. Its properties preserve the actual activity and
 unit-file states, including runtime-only enablement; missing properties remain
 unknown. The additive JSON `timer_state` field is that state's `to_dict()` or
-`null`. The existing `active` and `enabled` convenience booleans are unchanged;
-use the raw state when distinguishing unknown from inactive/disabled matters.
+`null`. A populated value has the shape
+`{"name": "mydag.timer", "properties": {"ActiveState": "active", "UnitFileState": "enabled"}}`;
+property keys and values are strings, and missing properties are not filled in.
+The existing `active` and `enabled` convenience booleans and positional constructor
+arguments are unchanged. Consumers enforcing an exact set of JSON keys must allow
+the new field. Use the raw state when distinguishing unknown from inactive/disabled matters.
+
+History and inventory query APIs return timezone-aware UTC `datetime` objects
+for recorded times; unavailable times are `None`. Lifecycle events without a UTC
+offset are not accepted as history evidence. The web renderer converts these
+aware values to server-local time rather than guessing a timezone for naive data.
 
 `list_runs(..., max_records=N)` and `run_logs(..., max_records=N)` optionally
 read only the newest N records per selected invocation (plus one to detect
