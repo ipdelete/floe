@@ -4,8 +4,9 @@
 
 Floe is a minimal local workflow runner: Python functions execute sequentially,
 systemd manages scheduling and processes, and journald is the history store.
-There are no retries or parallel task execution. Read [README.md](README.md) for
-the supported behavior and public API before changing a feature.
+There are no retries or parallel task execution. Read [README.md](README.md) and
+[docs/](docs/) for the supported behavior and public API before changing a
+feature.
 
 - Use Python 3.14+ and `uv`. Deployed services also require `/usr/bin/python3`
   to be 3.14+. Deployment planning requires `systemd-analyze`.
@@ -102,7 +103,7 @@ git diff --check
 
 ## Documentation expectations
 
-Keep the README, examples, help text, and public contracts aligned. Document
+Keep the README, docs/, examples, help text, and public contracts aligned. Document
 prerequisites, execution side effects, JSON/exit-code behavior, recovery steps,
 and compatibility limits when they change. Do not broaden guarantees beyond
 what implementation and validation support.

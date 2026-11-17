@@ -1,4 +1,4 @@
-"""The examples the README points at still work. No service manager involved."""
+"""The examples the documentation points at still work. No service manager involved."""
 
 import json
 import os

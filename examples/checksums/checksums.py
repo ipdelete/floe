@@ -1,7 +1,7 @@
 """Report files that were added, changed, or removed in a directory since the last run.
 
 A workflow meant to run unattended (see "Write workflows that run unattended"
-in the README):
+in docs/workflows.md):
 
 - tasks pass data through atomically replaced JSON files in ./state, tagged
   with FLOE_RUN_ID so a task never reads another run's results;
