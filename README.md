@@ -277,6 +277,10 @@ patterns keep such workflows predictable:
 - **Label what a run produces** with `FLOE_RUN_ID`, so files and records can
   be traced back to `floe runs` and `floe logs`.
 
+`examples/checksums/` applies these patterns: it reports files added,
+changed, or removed in a directory since the last run, keeps going when a file
+cannot be read, and rejects state written by an overlapping run.
+
 ## Inspect execution history
 
 Every run under systemd (scheduled or `floe start`) is recorded in journald.

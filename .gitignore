@@ -8,3 +8,8 @@ wheels/
 
 # Virtual environments
 .venv
+
+# Files the examples create when run in place
+examples/checksums/state/
+examples/checksums/out/
+examples/checksums/watched/
