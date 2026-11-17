@@ -107,3 +107,8 @@ patterns keep such workflows predictable:
 `examples/checksums/` applies these patterns: it reports files added,
 changed, or removed in a directory since the last run, keeps going when a file
 cannot be read, and rejects state written by an overlapping run.
+
+[`examples/feedwatch/`](../examples/feedwatch/README.md) applies them to an
+agent: it asks [pi](https://pi.dev) to triage new feed items, treats both the
+feed content and the agent's reply as untrusted, and saves each decision before
+publishing it. It needs pi and a model login, unlike the rest of Floe.

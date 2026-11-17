@@ -13,3 +13,6 @@ wheels/
 examples/checksums/state/
 examples/checksums/out/
 examples/checksums/watched/
+examples/feedwatch/config.json
+examples/feedwatch/state/
+examples/feedwatch/out/

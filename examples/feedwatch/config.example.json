@@ -1,0 +1,15 @@
+{
+  "pi": "~/.pi/agent/bin/pi",
+  "node_bin": null,
+  "model": "github-copilot/claude-haiku-5.5",
+  "thinking": "low",
+  "pi_timeout_seconds": 180,
+  "max_items_per_run": 25,
+  "max_age_days": 14,
+  "feeds": [
+    {"name": "systemd releases", "url": "https://github.com/systemd/systemd/releases.atom"},
+    {"name": "CPython tags", "url": "https://github.com/python/cpython/tags.atom"},
+    {"name": "Python blog", "url": "https://blog.python.org/feeds/posts/default"},
+    {"name": "LWN headlines", "url": "https://lwn.net/headlines/rss"}
+  ]
+}

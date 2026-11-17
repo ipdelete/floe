@@ -169,4 +169,6 @@ This disables the timer and deletes both unit files. Your workflow file and
 - [The service environment](deployment.md#the-service-environment): read this
   if a workflow works with `floe run` but fails under systemd.
 - [History](history.md): run statuses and what `floe logs` shows.
-- `examples/checksums/` is a workflow that keeps state between runs.
+- `examples/checksums/` is a workflow that keeps state between runs, and
+  [`examples/feedwatch/`](../examples/feedwatch/README.md) one that lets an
+  agent make decisions.
