@@ -273,8 +273,9 @@ def _home(path: Path | None) -> str:
 
 
 def _runs(args, ctx) -> int:
-    runs = floe.list_runs(_workflow_name(args.target, name=args.name), ctx.journal, ctx.sd,
-                          since=args.since, limit=args.limit)
+    name = _workflow_name(args.target, name=args.name)
+    _note_if_not_installed(name, ctx)
+    runs = floe.list_runs(name, ctx.journal, ctx.sd, since=args.since, limit=args.limit)
     if args.json:
         print(json.dumps([run.to_dict() for run in runs], indent=2))
         return 0
@@ -290,7 +291,9 @@ def _runs(args, ctx) -> int:
 
 
 def _logs(args, ctx) -> int:
-    logs = floe.run_logs(_workflow_name(args.target, name=args.name), args.run_id, ctx.journal, ctx.sd)
+    name = _workflow_name(args.target, name=args.name)
+    _note_if_not_installed(name, ctx)
+    logs = floe.run_logs(name, args.run_id, ctx.journal, ctx.sd)
     if args.json:
         print(json.dumps(logs.to_dict(), indent=2))
         return 0
@@ -302,6 +305,17 @@ def _logs(args, ctx) -> int:
         when = line.timestamp.astimezone().strftime("%H:%M:%S.%f")[:-3]
         print(f"{when}  {_describe(line)}")
     return 0
+
+
+def _note_if_not_installed(name: str, ctx) -> None:
+    """History outlives uninstalling, so these commands still work; say so on
+    stderr, so a mistyped name is not mistaken for an empty history."""
+    try:
+        floe.find_installed(ctx.store, name)
+    except floe.NotFoundError:
+        print(f"note: workflow {name!r} is not installed; showing recorded history only", file=sys.stderr)
+    except OSError:
+        pass  # unknown installation state: claim nothing either way
 
 
 def _detail(run: floe.Run) -> str:

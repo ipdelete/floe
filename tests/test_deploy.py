@@ -13,7 +13,7 @@ from floe.deploy import (
     unit_names,
     user_unit_dir,
 )
-from floe.model import UninstallError, ValidationError, Workflow
+from floe.model import NotFoundError, UninstallError, ValidationError, Workflow
 from floe.store import NotOwnedError, UnitStore
 from floe.systemd import Systemd, SystemdError
 
@@ -164,6 +164,27 @@ def test_start_and_status_use_unit_names(sd):
     assert result["mydag.timer"].to_dict()["name"] == "mydag.timer"
     with pytest.raises(ValidationError):
         unit_names("../bad")
+
+
+@pytest.mark.parametrize("service,timer,installed", [
+    ("not-found", "not-found", False),
+    ("not-found", "loaded", True),   # half an install still has state worth showing
+    ("loaded", "not-found", True),
+    ("masked", "masked", True),      # masked units exist; status must not hide them
+])
+def test_status_reports_not_installed_only_when_systemd_knows_neither_unit(sd, service, timer, installed):
+    sd.show.side_effect = lambda unit, *props: {"LoadState": service if unit.endswith(".service") else timer}
+    if installed:
+        assert [state["LoadState"] for state in status("mydag", sd).values()] == [service, timer]
+    else:
+        with pytest.raises(NotFoundError, match="'mydag' is not installed"):
+            status("mydag", sd)
+
+
+def test_status_query_failure_is_not_reported_as_not_installed(sd):
+    sd.show.side_effect = SystemdError(["systemctl", "show"], 1, "cannot connect to bus")
+    with pytest.raises(SystemdError):
+        status("mydag", sd)
 
 
 def test_user_unit_dir_resolved_at_call_time(tmp_path, monkeypatch):

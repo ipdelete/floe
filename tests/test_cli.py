@@ -222,6 +222,35 @@ def test_runs_json_and_empty(sd, capsys):
     assert capsys.readouterr().out == "no runs recorded\n"
 
 
+def test_status_of_unknown_workflow_is_an_error(sd, capsys):
+    assert main(["status", "mydga"], sd=sd) == 1
+    out, err = capsys.readouterr()
+    assert out == ""
+    assert err.startswith("error: workflow 'mydga' is not installed")
+
+
+@pytest.mark.parametrize("as_json", [False, True])
+def test_history_of_uninstalled_workflow_is_shown_with_a_note(sd, capsys, as_json):
+    """History outlives uninstalling; the note goes to stderr so JSON stays valid."""
+    assert main(["runs", "mydag", *(["--json"] if as_json else [])], sd=sd, journal=history_journal()) == 0
+    out, err = capsys.readouterr()
+    assert err == "note: workflow 'mydag' is not installed; showing recorded history only\n"
+    if as_json:
+        assert [r["status"] for r in json.loads(out)] == ["failed", "succeeded"]
+    else:
+        assert out.splitlines()[0].startswith("RUN")
+    assert main(["logs", "mydag"], sd=sd, journal=history_journal()) == 0
+    out, err = capsys.readouterr()
+    assert out.startswith(f"run {'b' * 32}  failed") and "not installed" in err
+
+
+def test_installed_workflow_history_has_no_note(flow, store, sd, capsys):
+    assert main(["install", str(flow)], store=store, sd=sd) == 0
+    capsys.readouterr()
+    assert main(["runs", "mydag"], store=store, sd=sd, journal=history_journal()) == 0
+    assert capsys.readouterr().err == ""
+
+
 def test_logs_latest_and_by_prefix(sd, capsys):
     assert main(["logs", "mydag"], sd=sd, journal=history_journal()) == 0
     out = capsys.readouterr().out
@@ -240,7 +269,9 @@ def test_logs_latest_and_by_prefix(sd, capsys):
 ])
 def test_logs_errors(sd, capsys, args, message):
     assert main(args, sd=sd, journal=history_journal()) == 1
-    assert capsys.readouterr().err.startswith(message)
+    note, error = capsys.readouterr().err.splitlines()[:2]
+    assert note == "note: workflow 'mydag' is not installed; showing recorded history only"
+    assert error.startswith(message)
 
 
 def test_runs_rejects_bad_limit(capsys):
@@ -309,10 +340,13 @@ def test_explicit_name_target_supports_py_suffix(flow, store, sd, capsys, comman
     if command not in ("run", "install"):
         flow.unlink()
     capsys.readouterr()
+    if command == "status":
+        sd.show.return_value = {"LoadState": "loaded", "ActiveState": "inactive"}
     result = main([command, "--name", "review.py"], store=store, sd=sd, journal=FakeJournal([]))
     out, err = capsys.readouterr()
     assert result == (1 if command == "logs" else 0)
     assert "workflow file not found" not in err
+    assert "not installed" not in err
     if command == "run":
         assert json.loads(out.splitlines()[-1])["workflow"] == "review.py"
     elif command == "install":

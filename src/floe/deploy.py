@@ -11,6 +11,7 @@ from pathlib import Path
 
 from .model import (
     InstallPlan,
+    NotFoundError,
     NotOwnedError,
     SystemdError,
     UninstallError,
@@ -303,9 +304,16 @@ def start(workflow: str, sd: Systemd, *, wait: bool = True) -> None:
 
 
 def status(workflow: str, sd: Systemd) -> dict[str, UnitState]:
-    """Current systemd state of the service and timer, keyed by unit name."""
+    """Current systemd state of the service and timer, keyed by unit name.
+
+    Raises NotFoundError when systemd knows neither unit (both not-found): no
+    unit file and nothing loaded. A failed query raises SystemdError instead.
+    """
     service, timer = unit_names(workflow)
-    return {
+    states = {
         service: UnitState(service, sd.show(service, *STATUS_PROPS["service"])),
         timer: UnitState(timer, sd.show(timer, *STATUS_PROPS["timer"])),
     }
+    if all(state["LoadState"] == "not-found" for state in states.values()):
+        raise NotFoundError(f"workflow {workflow!r} is not installed: systemd has no {service} or {timer}")
+    return states

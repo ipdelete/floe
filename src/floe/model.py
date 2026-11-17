@@ -55,7 +55,7 @@ class SystemdError(FloeError):
 
 
 class NotFoundError(FloeError, LookupError):
-    """No run (or no unique run) matches the requested ID."""
+    """A requested workflow or run does not exist, or a run ID is ambiguous."""
 
 
 class UninstallError(FloeError):

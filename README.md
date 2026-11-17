@@ -117,6 +117,12 @@ names ending in `.py`, even after their definition is deleted.
 `floe run mydag` and `floe install mydag` use the file recorded at install
 time; `uninstall` by name works even after the file is deleted.
 
+`floe status` fails with exit code 1 when systemd knows neither the service
+nor the timer, so a mistyped name is reported rather than shown as inactive.
+`floe runs` and `floe logs` keep working for names that are no longer
+installed, because journald retains their history; they then print a note on
+stderr, leaving stdout and exit codes unchanged.
+
 ## List installed workflows
 
 ```bash
