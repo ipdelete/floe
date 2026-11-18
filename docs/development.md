@@ -23,6 +23,9 @@ license resources. It does not contact a package registry or service manager.
 
 ## Engineering methods
 
+For session initialization and agent-document authoring, see the
+[project skills](../.agents/README.md).
+
 Use the repository's [Spike, Design, and Implement skills](engineering/README.md)
 to investigate uncertainty, make evidence-based decisions, and build against the
 resulting intent. They are complementary methods, not required stages for every
