@@ -34,6 +34,8 @@ For consequential choices, maintain an effort-local `decisions.md`. Capture deci
 
 ## Current efforts
 
+- [Parallel tasks](parallel-tasks/README.md): thread-worker contract probes and
+  recommendation for issues #8/#9; execution-model approval remains pending.
 - [Task retries](task-retries/decisions.md): approved policy/deployment direction,
   event compatibility, and validation scope for issue #6.
 
