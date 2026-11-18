@@ -75,6 +75,29 @@ feature.
 - Keep refactors focused and behavior-preserving unless a contract change is
   intentional and documented. Measure realistic workloads before optimizing.
 
+## Development and pull-request workflow
+
+1. Start from an up-to-date `master` (`git pull --ff-only`), preserving any
+   existing local work. Create a focused `fix/...`, `feature/...`, or `docs/...`
+   branch before making changes; never push changes directly to `master`.
+2. Implement the change, add appropriate regression tests, update documentation,
+   and run the relevant local validation below.
+3. Commit and push the branch, then open a PR against `master`. Describe the
+   change, validation results, skipped checks, and any remaining risks.
+4. Run PR-Agent on the PR. Verify each finding against the implementation and
+   supported contracts; fix valid issues and explain why others do not apply.
+   If review cannot run, report the blocker rather than claiming it completed.
+5. Push fixes and rerun affected tests and review as needed. Before merging,
+   inspect the final diff and confirm CI has passed on the latest PR commit;
+   pending or failed checks are not success. Do not bypass branch protection.
+6. When authorized to merge, squash-merge with a meaningful commit message.
+   Delete the merged PR's remote branch, update local `master`, and remove the
+   local branch only after confirming it contains no additional work. Squash
+   merging may require `git branch -D`; do not use it as blanket cleanup.
+
+Real-systemd E2E validation remains separately opt-in and requires explicit
+approval; a PR or passing CI does not authorize modifying the user's session.
+
 ## Testing and validation
 
 ```bash
