@@ -111,12 +111,13 @@ experiments use validation appropriate to the question. Safety rules apply to bo
 1. Start from an up-to-date `master` (`git pull --ff-only`), preserving any
    existing local work. Create a focused `fix/...`, `feature/...`, `docs/...`, or
    `spike/...` branch before making changes; never push changes directly to `master`.
-2. For disposable experiments, follow the
-   [spike branch workflow](docs/engineering/README.md#spike-branches-and-handoff);
-   steps 3–6 apply to work intended for merge, not spike branches. Keep merge-bound
-   PRs coherent; consequential designs need human approval before implementation.
-   Add appropriate tests and documentation, and run the relevant
-   [local validation](#testing-and-validation).
+2. Choose the appropriate path:
+   - **Disposable spike:** follow the
+     [spike branch workflow](docs/engineering/README.md#spike-branches-and-handoff)
+     and stop this checklist here; a PR is optional and not intended for merge.
+   - **Merge-bound work:** keep the PR coherent; consequential designs need human
+     approval before implementation. Add appropriate tests and documentation, run
+     the relevant [local validation](#testing-and-validation), then continue below.
 3. Commit and push the branch, then open a PR against `master`. Describe the
    change, relevant evidence and decisions, validation results, skipped checks,
    and unresolved questions or risks. PR-Agent and CI do not substitute for

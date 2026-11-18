@@ -44,7 +44,8 @@ A spike delivers evidence for a decision, not an implementation to merge.
    and experiment commit references, limitations, and untested assumptions—not
    necessarily the experimental code. Useful findings may be merged through a
    separate documentation/design PR without merging the spike branches. Keep spike
-   branches available until useful evidence is captured and cleanup is authorized.
+   branches available until useful evidence is captured and a maintainer explicitly
+   authorizes their deletion.
 5. Seek maintainer approval for consequential design choices, then implement on a
    fresh branch from updated `master` against that intent. Prototype code is
    throwaway by default; any deliberately reused code must independently meet
