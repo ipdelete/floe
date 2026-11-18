@@ -100,7 +100,9 @@ def brand_link():
 
 
 def favicon():
-    return logo_svg().replace("<title>", f"<style>{FAVICON_CSS}</style><title>", 1)
+    svg = logo_svg()
+    root_end = svg.index(">", svg.index("<svg")) + 1
+    return svg[:root_end] + f"<style>{FAVICON_CSS}</style>" + svg[root_end:]
 
 
 def link(url, label, *, icon_name=None):

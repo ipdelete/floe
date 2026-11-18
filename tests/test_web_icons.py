@@ -124,6 +124,17 @@ def test_favicon_reuses_logo_geometry_and_limits_styles_to_the_standalone_image(
     assert "<style>" not in logo_svg() and "<style>" not in render.brand_link()
 
 
+@pytest.mark.parametrize("title", ["", '<title id="brand-title">Floe</title>'])
+def test_favicon_style_does_not_depend_on_optional_title_metadata(monkeypatch, title):
+    source = logo_svg().replace("<title>Floe</title>", title)
+    monkeypatch.setattr(render, "logo_svg", lambda: source)
+    favicon = ElementTree.fromstring(render.favicon())
+    [style] = [node for node in favicon if node.tag.endswith("}style")]
+    assert style.text == render.FAVICON_CSS
+    assert [(node.tag, node.attrib) for node in favicon if not node.tag.endswith("}style")] == [
+        (node.tag, node.attrib) for node in ElementTree.fromstring(source)]
+
+
 def test_unknown_status_stays_text_only_and_escaped():
     markup = Markup(render.status("unknown <script>"))
     assert markup.words == ["Unknown <script>"]
