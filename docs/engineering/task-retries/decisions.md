@@ -1,6 +1,6 @@
 # Task retries
 
-Status: implemented; PR review and CI pending. Entry point for issue [#6](https://github.com/ipdelete/floe/issues/6).
+Status: implemented in [PR #12](https://github.com/ipdelete/floe/pull/12); PR-Agent findings evaluated (output-schema warnings noted below). Hosted CI passed on implementation commit `f7bf974`; merge awaits human authorization. Entry point for issue [#6](https://github.com/ipdelete/floe/issues/6).
 
 ## Approved direction
 
@@ -31,6 +31,6 @@ Validation: deterministic waits, failure/cancellation/callback isolation, old/ne
 - Responsive browser fixtures: success, waiting, and interrupted views at 320/390/768/1440px; attempt disclosures work and no page-level overflow. Inspected mobile success and desktop waiting renders. Mechanical design detector reported no findings.
 - Disposable mutation probes detected an off-by-one attempt limit, ignored fixed delay, lost attempt-output attribution, and removal of Tenacity's exhaustion callback. No mutations were retained.
 - Initial hosted CI exposed an offline-cache assumption: locked sync caches registry artifacts without necessarily fetching registry metadata. A direct wheel-URL fallback also failed in a fresh cache because uv keys direct-URL and registry artifacts separately. Packaging now uses offline locked runtime-only sync into the clean environment, then installs the project wheel without resolving dependencies again; wheel metadata explicitly asserts the Tenacity requirement. Retested with a separate fresh cache/environment.
-- PR-Agent's initial review produced findings with schema-validation warnings. Its valid shell-environment concern was fixed with minimal PATH/PYTHONPATH validation and a regression. The interpreter mismatch warning is intentional drift reporting, documented rather than an assertion that another environment is unusable. Empty/truncated retry waits have an explicit regression. Tenacity's exhaustion callback is required by the iterator (confirmed by mutation); cancellation/interrupt restoration and old/new schema behavior are covered.
+- PR-Agent ran twice; both outputs had schema-validation warnings, so these are evaluated advisory findings rather than a schema-validated review. Its valid shell-environment concern was fixed with minimal PATH/PYTHONPATH validation and a regression. The interpreter mismatch warning is intentional drift reporting, documented rather than an assertion that another environment is unusable. Empty/truncated retry waits have an explicit regression. Tenacity's exhaustion callback is required by the iterator (confirmed by mutation); cancellation/interrupt restoration and old/new schema behavior are covered.
 
 Uncertainty: actual systemd lifecycle behavior remains unverified without separately approved real-session tests. Browser validation used synthetic journal fixtures, not the user's session.

@@ -47,7 +47,7 @@ Runs of `floe run` outside systemd are not in the journal and do not appear.
 
 ## Attempt history and JSON compatibility
 
-Workflows without a `retries` mapping keep the schema-1 lifecycle sequence.
+Workflows without configured retries (including `retries = {}`) keep the schema-1 lifecycle sequence.
 Workflows with retry policies emit schema 2: the existing run/task events plus
 `attempt_started`, `attempt_completed`, and `retry_scheduled`. Only configured
 tasks have attempt events. Readers accept both schemas; old history has an empty

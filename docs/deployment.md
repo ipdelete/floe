@@ -93,6 +93,8 @@ The library's explicit `Deployment(python=...)` override must also provide Pytho
 bounded subprocess and a minimal PATH/PYTHONPATH environment, without inheriting
 shell Python overrides, executing the workflow there, or contacting systemd.
 This is an import preflight, not a reconstruction of every user-manager variable.
+Use an interpreter that starts with this minimal environment; interpreters needing
+shell activation or extra loader variables are not supported by this preflight.
 
 The interpreter appears as `Python=` in service `[X-Floe]` metadata and in the
 dry-run command. No shell activation, package installation, `uv` invocation, or
