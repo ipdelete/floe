@@ -2,7 +2,9 @@
 
 Floe ships through [GitHub Releases](https://github.com/ipdelete/floe/releases),
 not PyPI. A release contains a Python wheel, source distribution, and
-`SHA256SUMS`; its notes come from `CHANGELOG.md`. Publishing does not install,
+`SHA256SUMS`; its notes come from `CHANGELOG.md`. Checksums cover the two
+distributions. The saved Actions artifact also contains the notes, and its digest
+is verified when downloaded for publication. Publishing does not install,
 restart, or change anything on a user's machine or in a systemd session.
 
 ## Version policy
@@ -99,8 +101,10 @@ Build artifacts are retained for 30 days. Keep the original artifact: it is the
 source of truth for the bytes that passed validation.
 
 - **No release/draft exists:** fix configuration or transient failures and use
-  **Re-run failed jobs**. This reuses the successful validation job's artifact;
-  do not rebuild by rerunning all jobs or move the tag.
+  **Re-run failed jobs**. If validation succeeded, this reuses that job's artifact;
+  do not rebuild by rerunning all jobs or move the tag. If validation itself
+  failed before producing an approved artifact, rerunning it builds and validates
+  the distributions normally; there are no authorized publication bytes to reuse yet.
 - **A draft exists:** the automatic job deliberately stops rather than adopting
   or modifying it. Inspect the failed run and that exact tag's draft. Download
   the original Actions artifact with `gh run download RUN_ID --repo ipdelete/floe
@@ -119,8 +123,10 @@ source of truth for the bytes that passed validation.
   the original validated bytes cannot be recovered.
 
 Publication is not a transaction across uploads and metadata. Failures can leave
-a draft; they must not be interpreted as successful publication. Network/query
-errors are failures, not evidence that a release is absent.
+a draft; they must not be interpreted as successful publication. Do not manually
+create or edit a release/draft for the same tag while publication is running:
+workflow concurrency serializes Actions runs, not manual GitHub changes.
+Network/query errors are failures, not evidence that a release is absent.
 
 ## Download and install
 
