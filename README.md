@@ -41,4 +41,5 @@ installing it, and watching its timer start a run.
 - [History](docs/history.md): runs and logs from journald
 - [Dashboard](docs/web.md): minimal read-only local web UI
 - [Library](docs/library.md): architecture and the Python API
-- [Development](docs/development.md): tests and the real-systemd suite
+- [Development](docs/development.md): tests, CI, and the real-systemd suite
+- [Releases](docs/releases.md): SemVer, GitHub Releases, approval setup, and recovery

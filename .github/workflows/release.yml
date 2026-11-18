@@ -1,0 +1,92 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  configuration:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Require publishing approval configuration
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          reviewers=$(gh api "repos/$GITHUB_REPOSITORY/environments/release" \
+            --jq '[.protection_rules[] | select(.type == "required_reviewers") | .reviewers[]] | length')
+          test "$reviewers" -gt 0 || { echo '::error::Configure a required reviewer on the release environment.'; exit 1; }
+
+  validate:
+    uses: ./.github/workflows/ci.yml
+    with:
+      release-tag: ${{ github.ref_name }}
+    permissions:
+      contents: read
+
+  publish:
+    needs: [configuration, validate]
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    environment: release
+    permissions:
+      contents: write
+    steps:
+      # Publish the exact validated artifact, without rebuilding or checking out code.
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          artifact-ids: ${{ needs.validate.outputs.artifact-id }}
+          merge-multiple: true
+          path: dist
+          digest-mismatch: error
+      - name: Verify artifacts and refuse an existing release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          (cd dist && sha256sum --check --strict SHA256SUMS)
+          actual=$(gh api --method GET "repos/$GITHUB_REPOSITORY/commits" \
+            -f "sha=refs/tags/$RELEASE_TAG" -f per_page=1 --jq '.[0].sha')
+          test "$actual" = "$GITHUB_SHA"
+          count=$(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" --paginate --slurp | \
+            jq --arg tag "$RELEASE_TAG" '[.[][] | select(.tag_name == $tag)] | length')
+          test "$count" = 0 || { echo '::error::A release or draft already exists. Follow docs/releases.md recovery steps; do not overwrite it.'; exit 1; }
+      - name: Create draft and upload assets
+        id: release
+        uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3
+        with:
+          target_commitish: ${{ github.sha }}
+          body_path: dist/release-notes.md
+          draft: true
+          prerelease: ${{ needs.validate.outputs.prerelease == 'true' }}
+          overwrite_files: false
+          fail_on_unmatched_files: true
+          files: |
+            dist/*.whl
+            dist/*.tar.gz
+            dist/SHA256SUMS
+      - name: Publish completed draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_ID: ${{ steps.release.outputs.id }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          actual=$(gh api --method GET "repos/$GITHUB_REPOSITORY/commits" \
+            -f "sha=refs/tags/$RELEASE_TAG" -f per_page=1 --jq '.[0].sha')
+          test "$actual" = "$GITHUB_SHA"
+          gh api --method PATCH "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" \
+            -F draft=false -f make_latest=legacy --jq .html_url

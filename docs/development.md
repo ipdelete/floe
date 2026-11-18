@@ -21,6 +21,25 @@ dependencies into a temporary virtual environment outside the checkout. It
 checks the console entry point, isolated imports, and bundled icon geometry and
 license resources. It does not contact a package registry or service manager.
 
+## Continuous integration
+
+[CI](../.github/workflows/ci.yml) runs on PRs and pushes to `master`. It uses
+Ubuntu 26.04, checks that `/usr/bin/python3` is 3.14+ and the systemd executables
+exist, installs locked development dependencies, and runs the normal tests with
+`systemd_e2e` explicitly excluded. It also checks committed whitespace, validates
+deployment offline, builds a wheel through the source distribution, and tests
+that wheel's commands/resources in a clean environment outside the checkout.
+No installed workflow is started and no systemd session is modified.
+
+Distributions and checksums are saved as Actions artifacts for 30 days. The
+[Release workflow](../.github/workflows/release.yml) reuses CI for a version tag
+and publishes the exact saved files after approval, not rebuilt distributions.
+See [Releases](releases.md) for setup, version policy, and the maintainer steps.
+The small inline tag/version/changelog check has regression tests in
+`tests/test_release_version.py`; there is no custom publisher or CI image.
+
+## Opt-in real-session tests
+
 To test against your real user systemd session and journald:
 
 ```bash
