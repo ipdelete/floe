@@ -52,7 +52,12 @@ No service-manager or journal calls occur, and no user session is modified.
 The import probe intentionally exercises the documented unsupported concurrent
 use of task wrappers in a disposable interpreter. It is not a regression in the
 supported sequential API. Run the entire script for isolation, rather than
-importing a probe into a long-lived application.
+importing a probe into a long-lived application. Its assertions pin observations
+at the baseline commit, including the observed isolation failures. If a future
+loader fixes those failures, this script should fail its old expectations:
+re-evaluate the evidence, rather than treating that failure as a production
+regression. A failure can also indicate a changed setup; it is not by itself
+proof of a fix.
 
 ## Observations
 
@@ -212,6 +217,11 @@ prototype would add code without changing this recommendation.
 - `uv run python examples/deploy_demo.py`: passed validation/planning only; no
   installation writes or service-manager calls.
 - `git diff --check`: passed.
+- An injected output-probe exception verified restoration of both the Python
+  stdout object and descriptor 1 before the exception escaped. PR-Agent ran with
+  schema-validation warnings; its advisory findings were checked. The pinned
+  failure expectations are now explicit, and the decision link's anchor matches
+  its heading. This was not a schema-validated review.
 - These checks do not establish scheduler performance, process-worker viability,
   or real-systemd lifecycle behavior. Packaging/service commands were unchanged;
   no separate manual wheel-install exercise was needed for this evidence-only PR.
