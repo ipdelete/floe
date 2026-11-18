@@ -35,7 +35,14 @@ resulting intent. They are complementary methods, not required stages for every
 change. Keep useful findings and consequential decisions under
 `docs/engineering/<effort>/`; prototypes are disposable by default.
 
-The [PR workflow](../AGENTS.md#development-and-pull-request-workflow) is unchanged:
+For disposable experiments, use the
+[spike branch and evidence-handoff workflow](engineering/README.md#spike-branches-and-handoff):
+keep competing approaches independent and carry findings, rather than prototype
+implementations, into design. A spike branch is sufficient; a discussion PR is
+optional and not intended for merge.
+
+Work intended for `master`, including durable evidence/design documentation,
+follows the [PR workflow](../AGENTS.md#development-and-pull-request-workflow):
 focused branch and PR, PR-Agent review, valid findings addressed, CI passing on
 the latest commit, then authorized squash merge and safe branch cleanup. Skills
 and passing CI never authorize real-systemd tests or replace human architectural
