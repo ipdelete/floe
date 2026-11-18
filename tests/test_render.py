@@ -1,4 +1,5 @@
 import shutil
+import sys
 import subprocess
 from pathlib import Path
 
@@ -36,7 +37,7 @@ def test_render_units_is_deterministic_and_preserves_service_settings(tmp_path):
     assert rendered == dep.render_units()
     assert set(rendered) == {"demo.service", "demo.timer"}
     service = rendered["demo.service"]
-    assert f'ExecStart=/usr/bin/python3 -m floe_cli run "{dep.script.resolve()}"\n' in service
+    assert f'ExecStart={sys.executable} -m floe_cli run "{dep.script.resolve()}"\n' in service
     assert f'Environment="PYTHONPATH={Path(__file__).parents[1] / "src"}"\n' in service
     for setting in ("Type=oneshot", "TimeoutStartSec=30min", "KillMode=control-group",
                     "StandardOutput=journal", "StandardError=journal", "SyslogIdentifier=demo"):
@@ -53,7 +54,7 @@ def test_render_units_is_deterministic_and_preserves_service_settings(tmp_path):
 def test_literal_percent_paths_are_escaped_in_both_directives(tmp_path):
     script = tmp_path / "percent%h and $HOME" / "workflow.py"
     service = Deployment("demo", script, ["hourly"]).render_units()["demo.service"]
-    assert f'ExecStart=/usr/bin/python3 -m floe_cli run "{str(script).replace("%", "%%").replace("$", "$$")}"\n' in service
+    assert f'ExecStart={sys.executable} -m floe_cli run "{str(script).replace("%", "%%").replace("$", "$$")}"\n' in service
     assert f'WorkingDirectory={str(script.parent).replace("%", "%%")}\n' in service
 
 

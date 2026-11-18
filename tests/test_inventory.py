@@ -1,5 +1,6 @@
 """Discovering installed workflows from unit files, and summarizing them."""
 
+import sys
 from pathlib import Path
 from unittest.mock import create_autospec
 
@@ -79,14 +80,16 @@ def test_moved_floe_and_old_units(tmp_path, store, sd):
         path.write_text(path.read_text().split("Script=")[0])
     [found] = list_installed(store)
     assert found.script is None
-    assert found.problems == ("installed by an older floe version; reinstall from its definition file",)
+    assert found.problems == ("installed without an interpreter environment; reinstall",
+                              "installed by an older floe version; reinstall from its definition file")
 
     gone = tmp_path / "moved-src"
     for name in ("mydag.service", "mydag.timer"):
         path = store.path / name
         path.write_text(path.read_text() + f"Script={tmp_path / 'mydag.py'}\nFloe={gone}\n")
     [found] = list_installed(store)
-    assert found.problems == ("floe has moved since installation; reinstall",)
+    assert found.problems == ("installed without an interpreter environment; reinstall",
+                              "floe has moved since installation; reinstall")
 
 
 def test_cleanup_marker_reports_recovery_instead_of_an_old_installation(store):
@@ -186,6 +189,7 @@ def test_metadata_recorded_in_both_units(tmp_path, store, sd):
     script = deploy(tmp_path, store, sd)
     for name in ("mydag.service", "mydag.timer"):
         assert store.metadata(name) == {"Owner": "floe", "Workflow": "mydag",
-                                        "Script": str(script), "Floe": str(PACKAGE_ROOT)}
+                                        "Script": str(script), "Floe": str(PACKAGE_ROOT),
+                                        **({"Python": sys.executable} if name.endswith(".service") else {})}
     assert store.units() == ["mydag.service", "mydag.timer"]
     assert Path(store.metadata("mydag.service")["Floe"], "floe_cli").is_dir()

@@ -293,6 +293,37 @@ def test_task_stdout_is_attributed_to_its_task(workflow):
     assert output == [("first", "printed by first"), ("first", "child of first"),
                       ("second", "printed by second")]
 
+@pytest.mark.parametrize("eventual_success", [True, False])
+def test_task_retries_preserve_attempt_history_and_output(workflow, eventual_success):
+    flow = workflow(f'''
+        from floe import RetryPolicy
+
+        count = 0
+
+        def fetch():
+            global count
+            count += 1
+            print(f"attempt output {{count}}")
+            if count == 1 or not {eventual_success!r}:
+                raise TimeoutError("transient")
+
+        tasks = {{"fetch": fetch}}
+        dag = {{"fetch": set()}}
+        retries = {{"fetch": RetryPolicy(2, 0, (TimeoutError,))}}
+    ''')
+    result = floe_command("start", flow.name, check=False)
+    assert result.returncode == (0 if eventual_success else 1)
+    sync_journal()
+    logs = floe_json("logs", flow.name)
+    task, = logs["run"]["tasks"]
+    expected = "succeeded" if eventual_success else "failed"
+    assert task["status"] == logs["run"]["status"] == expected
+    assert [(a["number"], a["status"]) for a in task["attempts"]] == [(1, "failed"), (2, expected)]
+    assert task["failure_reason"] == (None if eventual_success else "exhausted")
+    assert [(line["message"], line["attempt"]) for line in logs["lines"] if line["kind"] == "output"] == [
+        ("attempt output 1", 1), ("attempt output 2", 2)]
+
+
 def test_failed_task(workflow):
     flow = workflow('''
         def ok():

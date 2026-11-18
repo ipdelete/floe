@@ -6,7 +6,9 @@ FloeError subclasses and never talk to the user, so any UI can drive them.
 """
 
 import os
-from dataclasses import dataclass
+import subprocess
+import sys
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from .model import (
@@ -63,7 +65,7 @@ class Deployment:
     workflow: str
     script: Path
     schedule: tuple[str, ...]
-    python: str = "/usr/bin/python3"
+    python: str = field(default_factory=lambda: os.path.abspath(sys.executable))
     timeout: str = "30min"
     persistent: bool = True
     pythonpath: Path = PACKAGE_ROOT
@@ -111,6 +113,7 @@ def plan_install(dep: Deployment, store: UnitStore, *, adopt: bool = False) -> I
     units = dep.render_units()
     validate_timeout(dep.timeout)
     validate_calendars(dep.schedule)
+    _validate_python(dep)
     changes = []
     for name, text in units.items():
         path = store.path / name
@@ -133,6 +136,22 @@ def plan_install(dep: Deployment, store: UnitStore, *, adopt: bool = False) -> I
         else:
             changes.append(UnitChange(name, path, "update", text, current))
     return InstallPlan(dep.workflow, dep.timer_name, tuple(changes))
+
+
+def _validate_python(dep: Deployment) -> None:
+    """Check imports without executing workflow code or contacting the manager."""
+    code = ('import sys, importlib.util; '
+            'sys.version_info >= (3, 14) or sys.exit("Python 3.14+ required"); '
+            'import tenacity; import floe; '
+            'importlib.util.find_spec("floe_cli") is not None or sys.exit("floe_cli is missing")')
+    try:
+        result = subprocess.run([dep.python, "-B", "-c", code], capture_output=True, text=True,
+                                env={"PATH": os.defpath, "PYTHONPATH": str(dep.pythonpath)}, cwd="/", timeout=15)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise ValidationError([f"cannot validate Python environment {dep.python}: {exc}"]) from exc
+    if result.returncode:
+        raise ValidationError([f"Python environment {dep.python} must provide Floe and Tenacity: "
+                               f"{result.stderr.strip()}"])
 
 
 def apply(plan: InstallPlan, store: UnitStore, sd: Systemd) -> list[str]:

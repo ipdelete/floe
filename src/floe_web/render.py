@@ -22,6 +22,7 @@ header a:hover, main > nav a:hover, td a:hover,
 header a:focus-visible, main > nav a:focus-visible, td a:focus-visible { text-decoration: underline; text-decoration-thickness: 1px; }
 td a { font-weight: 500; }
 .inventory td:first-child > .cell > a { font-weight: 600; }
+.tasks td:first-child { min-width: 6ch; }
 time, table { font-variant-numeric: tabular-nums; }
 .lucide { display: inline-block; width: 1rem; height: 1rem; margin-inline-end: .35em; vertical-align: -.125em; flex-shrink: 0; }
 .floe-mark { width: 1.25rem; height: 1.25rem; margin-inline-end: .4rem; flex-shrink: 0; }
@@ -271,11 +272,15 @@ def log_message(line):
         return text(shorten(line.message))
     if event.event == "run_started":
         message = "Run started"
-    elif event.event == "task_started":
+    elif event.event in ("task_started", "attempt_started"):
         message = "Started"
+    elif event.event == "retry_scheduled":
+        message = f"Waiting {event.delay_seconds:g}s before attempt {event.attempt + 1}/{event.max_attempts}"
     else:
         message = ("Run " + event.status if event.event == "run_completed"
                    else event.status.capitalize())
+    if event.failure_reason:
+        message += f" ({event.failure_reason})"
     if event.error:
         message += ": " + event.error
     return text(shorten(message))
@@ -307,6 +312,8 @@ def log_view(logs):
         previous_task = task
         kind = "systemd" if line.kind == "systemd" else ""
         label = task or ("run" if line.event else line.kind)
+        if line.attempt:
+            label += f" · attempt {line.attempt}"
         body += (f'<li class="log-line {kind}"><span class="log-time">'
                  + time_element(line.timestamp, f"{local:%H:%M:%S}") + "</span>"
                  + f'<span class="log-task">{text(label)}</span>'
@@ -337,8 +344,24 @@ def run_detail(logs):
     for task in run.tasks:
         name = (link("#" + targets[task.name], task.name) if task.name in targets else
                 text(task.name) + ' <span class="muted">(no retained log records)</span>')
-        rows.append((name, status(task.status), text(duration(task.duration))))
-    body += table(("Task", "Status", "Duration"), rows) if rows else "<p>No task records available.</p>"
+        detail = ""
+        if task.retry_at:
+            detail = '<div>Waiting to retry · ' + timestamp(task.retry_at) + '</div>'
+        elif task.attempts:
+            number = task.attempts[-1].number
+            label = (f"Succeeded after {number} attempts" if task.status == "succeeded" and number > 1
+                     else f"Attempt {number}/{task.max_attempts}")
+            detail = '<div>' + text(label) + '</div>'
+        if task.failure_reason:
+            detail += '<div>' + text(task.failure_reason.replace('_', ' ')) + '</div>'
+        if task.attempts:
+            detail += '<details><summary>Attempt history</summary><ul>'
+            for attempt in task.attempts:
+                detail += (f'<li>Attempt {attempt.number}: {text(attempt.status)}'
+                           + (': ' + text(shorten(attempt.error)) if attempt.error else '') + '</li>')
+            detail += '</ul></details>'
+        rows.append((name, status(task.status) + detail, text(duration(task.duration))))
+    body += table(("Task", "Status", "Duration"), rows, css_class="tasks") if rows else "<p>No task records available.</p>"
     if run.error:
         body += f'<h2>Error</h2><pre>{text(shorten(run.error, 8000, "error"))}</pre>'
     command = f"floe logs --name {shell_arg(run.workflow)} {shell_arg(run.run_id)}"

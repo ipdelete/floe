@@ -1,3 +1,4 @@
+import os
 import subprocess
 import sys
 import tomllib
@@ -7,10 +8,10 @@ from zipfile import ZipFile
 ROOT = Path(__file__).parents[1]
 
 
-def test_no_runtime_dependencies_and_floe_command():
+def test_approved_runtime_dependencies_and_floe_command():
     pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text())
     project = pyproject["project"]
-    assert project.get("dependencies", []) == []
+    assert project["dependencies"] == ["tenacity>=9.1.4,<10"]
     assert project["scripts"] == {"floe": "floe_cli.main:main"}
     assert pyproject["tool"]["uv"]["build-backend"]["module-name"] == ["floe", "floe_cli", "floe_web"]
 
@@ -29,6 +30,8 @@ def test_wheel_installs_with_icons_and_console_entry_point_outside_checkout(tmp_
         assert archive.read("floe_web/logo.svg") == (ROOT / "src/floe_web/logo.svg").read_bytes()
         for path in expected.iterdir():
             assert archive.read(f"floe_web/icons/{path.name}") == path.read_bytes()
+        metadata = archive.read(next(name for name in archive.namelist() if name.endswith(".dist-info/METADATA"))).decode()
+        assert "Requires-Dist: tenacity>=9.1.4,<10" in metadata
 
     environment = tmp_path / "venv"
     created = subprocess.run(
@@ -37,14 +40,26 @@ def test_wheel_installs_with_icons_and_console_entry_point_outside_checkout(tmp_
     )
     assert created.returncode == 0, created.stdout + created.stderr
     python = environment / "bin" / "python"
+    # Locked sync can reuse cached registry artifacts without index metadata.
+    # Install only runtime dependencies here; the project itself must come from
+    # the wheel, never from an editable checkout.
+    dependencies = subprocess.run(
+        ["uv", "sync", "--project", str(ROOT), "--offline", "--locked", "--no-dev", "--no-install-project"],
+        env={**os.environ, "UV_PROJECT_ENVIRONMENT": str(environment)},
+        cwd=tmp_path, capture_output=True, text=True, timeout=30,
+    )
+    assert dependencies.returncode == 0, dependencies.stdout + dependencies.stderr
     installed = subprocess.run(
         ["uv", "pip", "install", "--offline", "--no-deps", "--python", str(python), str(wheel)],
         cwd=tmp_path, capture_output=True, text=True, timeout=30,
     )
     assert installed.returncode == 0, installed.stdout + installed.stderr
     rendered = subprocess.run(
-        [str(python), "-I", "-c", '''
+        [str(python), "-I", "-c", r'''
 import sys
+import json
+import shlex
+import subprocess
 from pathlib import Path
 from importlib.resources import files
 from xml.etree import ElementTree
@@ -69,6 +84,31 @@ brand = ElementTree.fromstring(render.brand_link())
 assert brand[0].get("aria-hidden") == "true" and brand[0].tail == "Floe"
 favicon = ElementTree.fromstring(render.favicon())
 assert len([node for node in favicon if node.tag.endswith("}path")]) == 2
+script = Path.cwd() / "retry_flow.py"
+script.write_text('from floe import RetryPolicy\nWORKFLOW = "packaged"\nSCHEDULE = ["hourly"]\ncount = 0\ndef task():\n    global count\n    count += 1\n    if count == 1: raise TimeoutError("transient")\ntasks = {"task": task}\ndag = {"task": set()}\nretries = {"task": RetryPolicy(2, 0, (TimeoutError,))}\n')
+dep = floe.Deployment.for_workflow(floe.load(script))
+assert dep.python == sys.executable
+units = dep.render_units()
+service = units["packaged.service"]
+assert f"Python={sys.executable}\n" in service
+command = next(line.removeprefix("ExecStart=") for line in service.splitlines() if line.startswith("ExecStart="))
+# Test paths contain no systemd specifiers or dollar expansions.
+argv = shlex.split(command)
+assert argv == [sys.executable, "-m", "floe_cli", "run", str(script)]
+env = {"PATH": "/usr/bin:/bin", "PYTHONPATH": str(dep.pythonpath)}
+result = subprocess.run(argv, env=env, cwd=script.parent, capture_output=True, text=True, timeout=10)
+assert result.returncode == 0, result.stderr
+attempts = [json.loads(line) for line in result.stdout.splitlines() if json.loads(line)["event"] == "attempt_completed"]
+assert [event["status"] for event in attempts] == ["failed", "succeeded"]
+floe.plan_install(dep, floe.UnitStore(Path.cwd() / "units"))
+assert not (Path.cwd() / "units").exists()
+paths = []
+for name, contents in units.items():
+    path = Path.cwd() / name
+    path.write_text(contents)
+    paths.append(str(path))
+verified = subprocess.run(["systemd-analyze", "--user", "verify", *paths], capture_output=True, text=True, timeout=15)
+assert verified.returncode == 0, verified.stderr
 '''], cwd=tmp_path, capture_output=True, text=True, timeout=10,
     )
     assert rendered.returncode == 0, rendered.stdout + rendered.stderr

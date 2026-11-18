@@ -41,7 +41,6 @@ jobs:
       - name: Check prerequisites
         run: |
           test "$(id -u)" != 0
-          /usr/bin/python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 14) else "System Python 3.14+ required")'
           command -v systemd-analyze
           command -v systemctl
           command -v journalctl
@@ -115,13 +114,14 @@ jobs:
           uv build --wheel dist/*.tar.gz
       - name: Check built wheel outside checkout
         run: |
-          uv venv --python /usr/bin/python3 "$RUNNER_TEMP/installed"
+          uv venv --python 3.14 "$RUNNER_TEMP/installed"
+          UV_PROJECT_ENVIRONMENT="$RUNNER_TEMP/installed" uv sync --offline --locked --no-dev --no-install-project
           uv pip install --offline --no-deps --python "$RUNNER_TEMP/installed/bin/python" dist/*.whl
           cd "$RUNNER_TEMP"
           installed/bin/floe --help
           installed/bin/python -I -c 'import floe; from floe_web import render; from floe_web.assets import ICON_NAMES; [render.icon(name) for name in ICON_NAMES]; render.favicon(); render.document("Workflows", render.inventory([]), "/")'
           site=$(installed/bin/python -I -c 'import floe,pathlib; print(pathlib.Path(floe.__file__).resolve().parents[1])')
-          PYTHONPATH="$site" /usr/bin/python3 -s -m floe_cli --help
+          PYTHONPATH="$site" installed/bin/python -m floe_cli --help
       - name: Checksum distributions
         env:
           RELEASE_TAG: ${{ inputs.release-tag }}

@@ -8,8 +8,10 @@ uv run python examples/deploy_demo.py  # validate calendars and plan deployment 
 Normal tests use temporary directories and mock the service manager. History
 tests use journal records captured from real systemd (`tests/fixtures`). When
 available, `systemd-analyze verify` also checks generated units without installing
-them. A test runs the exact service command with the system Python and no
-virtual environment, and `tests/test_examples.py` keeps the examples working.
+them. Tests run the exact service command with the recorded installing Python
+environment and no shell activation; `tests/test_examples.py` keeps examples
+working. Retry tests use real Tenacity decisions with controlled waits rather
+than wall-clock sleeps.
 
 Web tests use temporary unit files, a fake journal and service manager, and a
 real ephemeral loopback HTTP server. They check navigation, output escaping,
@@ -17,9 +19,10 @@ read-only behavior, bounded reads, caching, and HTTP restrictions. They do not
 contact the real user systemd session.
 
 The packaging test uses `uv` to build a wheel offline and install it without
-dependencies into a temporary virtual environment outside the checkout. It
-checks the console entry point, isolated imports, and bundled icon geometry and
-license resources. It does not contact a package registry or service manager.
+registry access into a temporary virtual environment outside the checkout,
+including cached Tenacity. It checks the console entry point, isolated imports,
+bundled icon resources, a retry workflow through the exact generated service
+command, deployment planning, and offline unit verification. It does not contact a package registry or service manager.
 
 ## Engineering methods
 
@@ -41,8 +44,8 @@ approval.
 ## Continuous integration
 
 [CI](../.github/workflows/ci.yml) runs on PRs and pushes to `master`. It uses
-Ubuntu 26.04, checks that `/usr/bin/python3` is 3.14+ and the systemd executables
-exist, installs locked development dependencies, and runs the normal tests with
+Ubuntu 26.04, checks that systemd executables exist, uses Python 3.14 environments,
+installs locked development dependencies, and runs the normal tests with
 `systemd_e2e` explicitly excluded. It also checks committed whitespace, validates
 deployment offline, builds a wheel through the source distribution, and tests
 that wheel's commands/resources in a clean environment outside the checkout.

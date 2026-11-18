@@ -150,8 +150,8 @@ Follow [Deployment](deployment.md) when unit paths/settings need updating.
 ## Maintenance and references
 
 Keep pinned action revisions and the `uv` version current through reviewed PRs.
-CI uses GitHub's Ubuntu 26.04 hosted image because its system Python is 3.14+;
-it fails rather than weakening the `/usr/bin/python3` check on an older image.
+CI uses GitHub's Ubuntu 26.04 hosted image for systemd tooling and Python 3.14
+environments managed by uv; generated services retain their installing environment.
 
 The workflows use the standard patterns in
 [Black's Python CLI CI](https://github.com/psf/black/blob/main/.github/workflows/test.yml),

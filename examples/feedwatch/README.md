@@ -13,7 +13,7 @@ The agent is [pi](https://pi.dev), called once per run in non-interactive mode.
 ## Requirements
 
 - pi, logged in to a model provider (`pi`, then `/login`), and the Node.js
-  that pi runs on. Floe and this workflow need only the standard library.
+  that pi runs on. This workflow adds no Python dependencies beyond Floe's Tenacity.
 - Network access to the feeds and to the model provider.
 
 ## Set up

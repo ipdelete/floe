@@ -4,7 +4,9 @@ There is no registry: each unit's [X-Floe] section records the workflow name,
 its definition file, and the floe source directory the service uses.
 """
 
+import os
 import re
+import sys
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -60,6 +62,14 @@ def _installed(name: str, entry: _UnitPair, package_root: Path) -> InstalledWork
     for kind, path in (("service", service), ("timer", timer)):
         if path is None:
             problems.append(f"{kind} unit is missing; reinstall")
+    if service is not None:
+        python = entry.metadata.get("service", {}).get("Python")
+        if python is None:
+            problems.append("installed without an interpreter environment; reinstall")
+        elif not Path(python).is_absolute() or not Path(python).is_file() or not os.access(python, os.X_OK):
+            problems.append(f"Python interpreter missing or not executable: {python}; reinstall")
+        elif python != os.path.abspath(sys.executable):
+            problems.append(f"uses Python from {python}; reinstall to use {os.path.abspath(sys.executable)}")
     scripts = {meta.get("Script") for meta in entry.metadata.values()}
     roots = {meta.get("Floe") for meta in entry.metadata.values()}
     script = None

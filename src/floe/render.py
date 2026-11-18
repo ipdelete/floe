@@ -59,7 +59,7 @@ def metadata(workflow: str, script: Path, pythonpath: Path) -> str:
 
 def render_service(workflow: str, script: Path, python: str, timeout: str, pythonpath: Path) -> str:
     """The service runs `floe run <script>` with the given interpreter, finding
-    floe through PYTHONPATH so no virtual environment is needed."""
+    floe through PYTHONPATH; the interpreter environment must provide Tenacity."""
     if not python.startswith("/"):
         raise ValueError("python must be an absolute executable path")
     if not pythonpath.is_absolute():
@@ -76,7 +76,7 @@ def render_service(workflow: str, script: Path, python: str, timeout: str, pytho
         f"TimeoutStartSec={literal(timeout)}\n"
         "KillMode=control-group\nStandardOutput=journal\nStandardError=journal\n"
         f"SyslogIdentifier={workflow}\n\n"
-        f"{metadata(workflow, script, pythonpath)}"
+        f"{metadata(workflow, script, pythonpath)}Python={python}\n"
     )
 
 

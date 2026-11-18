@@ -7,6 +7,7 @@ JSON-ready form for machine interfaces.
 
 import difflib
 import inspect
+import math
 import re
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
@@ -16,7 +17,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Literal
 
-EVENT_SCHEMA = 1
+EVENT_SCHEMA = 2
 _NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,246}")
 _CONTROL = re.compile(r"[\x00-\x1f\x7f]")
 
@@ -118,7 +119,45 @@ def _normalize_dag(dag: object) -> tuple[dict[str, frozenset[str]] | None, list[
     return normalized, problems
 
 
+def _valid_delay(value: object) -> bool:
+    if type(value) not in (int, float):
+        return False
+    try:
+        return math.isfinite(value) and value >= 0
+    except OverflowError:
+        return False
+
+
 # --- Workflow ---------------------------------------------------------------
+
+@dataclass(frozen=True)
+class RetryPolicy:
+    """Finite per-task retries; retry_on must explicitly name ordinary exceptions."""
+
+    max_attempts: int
+    delay_seconds: float
+    retry_on: tuple[type[Exception], ...]
+
+    def __post_init__(self) -> None:
+        if isinstance(self.retry_on, Iterable) and not isinstance(self.retry_on, (str, bytes)):
+            object.__setattr__(self, "retry_on", tuple(self.retry_on))
+
+    def problems(self) -> list[str]:
+        problems = []
+        if type(self.max_attempts) is not int or self.max_attempts < 1:
+            problems.append("max_attempts must be a positive integer")
+        if not _valid_delay(self.delay_seconds):
+            problems.append("delay_seconds must be finite and nonnegative")
+        if (not isinstance(self.retry_on, tuple) or not self.retry_on
+                or any(not isinstance(cls, type) or not issubclass(cls, Exception)
+                       for cls in self.retry_on)):
+            problems.append("retry_on must be a nonempty sequence of Exception subclasses")
+        return problems
+
+    def to_dict(self) -> dict:
+        return {"max_attempts": self.max_attempts, "delay_seconds": self.delay_seconds,
+                "retry_on": [f"{cls.__module__}.{cls.__qualname__}" for cls in self.retry_on]}
+
 
 @dataclass(frozen=True, eq=False)
 class Workflow:
@@ -133,6 +172,7 @@ class Workflow:
     dag: Mapping[str, frozenset[str]]
     schedule: tuple[str, ...] = ()
     source: Path | None = None
+    retries: Mapping[str, RetryPolicy] = field(default_factory=dict)
     order: tuple[str, ...] = field(init=False)
 
     def __post_init__(self) -> None:
@@ -140,19 +180,31 @@ class Workflow:
         tasks = dict(self.tasks) if isinstance(self.tasks, Mapping) else None
         dag, dag_errors = _normalize_dag(self.dag)
         problems = name_problems(self.name) + schedule_errors
+        retries = dict(self.retries) if isinstance(self.retries, Mapping) else {}
+        if not isinstance(self.retries, Mapping):
+            problems.append("retries must be a mapping of task names to RetryPolicy")
+        for name, policy in retries.items():
+            if tasks is not None and name not in tasks:
+                problems.append(f"retry policy for unknown task {name!r}")
+            if not isinstance(policy, RetryPolicy):
+                problems.append(f"retry policy for {name!r} must be a RetryPolicy")
+            else:
+                problems.extend(f"retry policy for {name!r}: {problem}" for problem in policy.problems())
         if tasks is None:
             problems.append("tasks must be a mapping of names to callables")
         problems += dag_errors
         order: tuple[str, ...] = ()
         if tasks is not None and dag is not None:
-            problems += _graph_problems(tasks, dag)
-            if not problems:
+            graph_errors = _graph_problems(tasks, dag)
+            problems += graph_errors
+            if not graph_errors and not dag_errors:
                 try:
                     order = tuple(TopologicalSorter(dag).static_order())
                 except CycleError as exc:
                     problems.append(f"dependency cycle: {' -> '.join(map(str, exc.args[1]))}")
         if problems:
             raise ValidationError(problems, subject="workflow")
+        object.__setattr__(self, "retries", MappingProxyType(retries))
         object.__setattr__(self, "tasks", MappingProxyType(tasks))
         object.__setattr__(self, "dag", MappingProxyType(dag))
         object.__setattr__(self, "schedule", schedule)
@@ -166,6 +218,7 @@ class Workflow:
             "source": None if self.source is None else str(self.source),
             "order": list(self.order),
             "dag": {name: sorted(deps) for name, deps in self.dag.items()},
+            "retries": {name: policy.to_dict() for name, policy in self.retries.items()},
         }
 
 
@@ -201,7 +254,8 @@ def _graph_problems(tasks: dict, dag: dict[str, frozenset[str]]) -> list[str]:
 
 # --- Run events ---------------------------------------------------------------
 
-EventKind = Literal["run_started", "task_started", "task_completed", "run_completed"]
+EventKind = Literal["run_started", "task_started", "task_completed", "run_completed",
+                    "attempt_started", "attempt_completed", "retry_scheduled"]
 Status = Literal["succeeded", "failed"]
 
 
@@ -217,13 +271,20 @@ class Event:
     status: Status | None = None
     error: str | None = None
     schema: int = EVENT_SCHEMA
+    attempt: int | None = None
+    max_attempts: int | None = None
+    delay_seconds: float | None = None
+    failure_reason: Literal["exhausted", "non_retryable"] | None = None
 
     @classmethod
     def from_dict(cls, data: object) -> Event | None:
         """Parse a JSON event, or return None if it isn't one of this schema."""
-        if not isinstance(data, dict) or type(data.get("schema")) is not int or data["schema"] != EVENT_SCHEMA:
+        if not isinstance(data, dict) or type(data.get("schema")) is not int or data["schema"] not in (1, 2):
             return None
-        if data.get("event") not in ("run_started", "task_started", "task_completed", "run_completed"):
+        kinds = ("run_started", "task_started", "task_completed", "run_completed")
+        if data["schema"] == 2:
+            kinds += ("attempt_started", "attempt_completed", "retry_scheduled")
+        if data.get("event") not in kinds:
             return None
         fields = {key: data.get(key) for key in ("workflow", "run_id", "timestamp", "task", "status", "error")}
         if not all(isinstance(fields[key], str) and fields[key] for key in ("workflow", "run_id", "timestamp")):
@@ -231,7 +292,25 @@ class Event:
         if any(fields[key] is not None and not isinstance(fields[key], str) for key in ("task", "status", "error")):
             return None
         kind = data["event"]
-        if kind.startswith("task_"):
+        extra = {key: data.get(key) for key in ("attempt", "max_attempts", "delay_seconds", "failure_reason")}
+        if kind.startswith("attempt_") or kind == "retry_scheduled":
+            if (type(extra["attempt"]) is not int or type(extra["max_attempts"]) is not int
+                    or not 1 <= extra["attempt"] <= extra["max_attempts"]):
+                return None
+        elif extra["attempt"] is not None or extra["max_attempts"] is not None:
+            return None
+        if kind == "retry_scheduled":
+            delay = extra["delay_seconds"]
+            if not _valid_delay(delay) or extra["attempt"] >= extra["max_attempts"]:
+                return None
+        elif extra["delay_seconds"] is not None:
+            return None
+        if extra["failure_reason"] is not None:
+            if (kind != "task_completed" or fields["status"] != "failed"
+                    or extra["failure_reason"] not in ("exhausted", "non_retryable")
+                    or data["schema"] != 2):
+                return None
+        if kind.startswith(("task_", "attempt_")) or kind == "retry_scheduled":
             if not fields["task"]:
                 return None
         elif fields["task"] is not None:
@@ -250,12 +329,12 @@ class Event:
             timestamp.astimezone(UTC)  # also reject offsets that overflow datetime's range
         except (ValueError, OverflowError):
             return None
-        return cls(event=kind, **fields)
+        return cls(event=kind, schema=data["schema"], **fields, **extra)
 
     def to_dict(self) -> dict:
         data = {"schema": self.schema, "event": self.event, "workflow": self.workflow,
                 "run_id": self.run_id, "timestamp": self.timestamp}
-        for key in ("task", "status", "error"):
+        for key in ("task", "status", "error", "attempt", "max_attempts", "delay_seconds", "failure_reason"):
             if (value := getattr(self, key)) is not None:
                 data[key] = value
         return data
@@ -338,6 +417,21 @@ def _seconds(start: datetime | None, end: datetime | None) -> timedelta | None:
 
 
 @dataclass(frozen=True)
+class AttemptRun:
+    """Recorded evidence of one task call; absent starts are not synthesized."""
+
+    number: int
+    status: RunStatus
+    started: datetime | None = None
+    finished: datetime | None = None
+    error: str | None = None
+
+    def to_dict(self) -> dict:
+        return {"number": self.number, "status": self.status, "started": _iso(self.started),
+                "finished": _iso(self.finished), "error": self.error}
+
+
+@dataclass(frozen=True)
 class TaskRun:
     """One task within a recorded run. `incomplete`: the run ended mid-task."""
 
@@ -346,6 +440,10 @@ class TaskRun:
     started: datetime | None = None
     finished: datetime | None = None
     error: str | None = None
+    attempts: tuple[AttemptRun, ...] = ()
+    max_attempts: int | None = None
+    retry_at: datetime | None = None
+    failure_reason: str | None = None
 
     @property
     def duration(self) -> timedelta | None:
@@ -353,7 +451,10 @@ class TaskRun:
 
     def to_dict(self) -> dict:
         duration = self.duration
-        return {"name": self.name, "status": self.status, "started": _iso(self.started),
+        return {"attempts": [attempt.to_dict() for attempt in self.attempts],
+                "max_attempts": self.max_attempts, "retry_at": _iso(self.retry_at),
+                "failure_reason": self.failure_reason,
+                "name": self.name, "status": self.status, "started": _iso(self.started),
                 "finished": _iso(self.finished), "error": self.error,
                 "duration": None if duration is None else duration.total_seconds()}
 
@@ -415,9 +516,10 @@ class LogLine:
     task: str | None = None
     priority: int = 6
     event: Event | None = None
+    attempt: int | None = None
 
     def to_dict(self) -> dict:
-        return {"timestamp": _iso(self.timestamp), "kind": self.kind, "message": self.message,
+        return {"attempt": self.attempt, "timestamp": _iso(self.timestamp), "kind": self.kind, "message": self.message,
                 "task": self.task, "priority": self.priority,
                 "event": None if self.event is None else self.event.to_dict()}
 

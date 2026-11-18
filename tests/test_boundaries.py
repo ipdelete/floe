@@ -1,6 +1,6 @@
 """Enforce the architecture: the floe library holds the logic and never talks to
-users; UIs (floe_cli and floe_web) use only floe's public API; everything is
-standard library only, so systemd can run it with the system Python."""
+users; UIs use only floe's public API. Tenacity is the sole approved runtime
+dependency and is confined to the runner."""
 
 import ast
 import sys
@@ -33,10 +33,10 @@ def rel(path):
 
 
 @pytest.mark.parametrize("path", LIBRARY + UIS, ids=rel)
-def test_standard_library_only(path):
+def test_approved_runtime_dependencies_only(path):
     third_party = {name for name in imported_modules(tree(path))
                    if name.split(".")[0] not in sys.stdlib_module_names | OURS}
-    assert not third_party
+    assert third_party <= ({"tenacity"} if path == SRC / "floe" / "runner.py" else set())
 
 
 @pytest.mark.parametrize("path", LIBRARY, ids=rel)

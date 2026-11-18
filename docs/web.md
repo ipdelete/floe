@@ -11,8 +11,8 @@ An unavailable port or other startup error exits with code 1. Invalid arguments
 exit with code 2. A normal Ctrl-C shutdown exits with code 0.
 
 The dashboard requires the same user-session tools as the history CLI:
-`systemctl` and `journalctl`. It uses the Python standard library, with no
-frontend dependencies, JavaScript, or external assets. It does not launch a
+`systemctl` and `journalctl`, and Floe's Python environment including Tenacity.
+The web layer has no frontend dependencies, JavaScript, or external assets. It does not launch a
 browser, install a service, or change journal retention.
 
 A six-icon Lucide subset marks Refresh, back navigation, and the four run
@@ -86,6 +86,13 @@ separate date/offset headings when the local date or DST offset changes.
 same display limit) using native HTML; no JavaScript is needed. Ordinary output,
 including malformed event-shaped JSON, is never reinterpreted as a lifecycle
 event. Short positive durations display as `<0.1s` rather than `0.0s`.
+
+Retry-configured tasks show the current attempt or scheduled wait, eventual
+success after multiple attempts, and explicit exhausted/non-retryable failure.
+**Attempt history** expands retained attempt statuses/errors, including failures
+before eventual success. Log labels include attempt numbers. Missing attempt
+completion after an interruption stays incomplete; partial history does not
+invent earlier attempts. These displays are snapshots; refresh to update them.
 
 Task names in the summary link to their first retained log record, with
 keyboard-focusable task markers and **Back to tasks** links. Markers do not
