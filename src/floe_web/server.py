@@ -3,8 +3,10 @@
 import re
 import sys
 import time
+from base64 import b64encode
 from collections import OrderedDict
 from dataclasses import dataclass
+from hashlib import sha256
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import unquote, urlsplit
 
@@ -16,6 +18,11 @@ HISTORY_SINCE = "7 days ago"
 MAX_RECORDS = 1000
 CACHE_SECONDS = 3
 _WORKFLOW_ROUTE = re.compile(r"/workflows/([^/]+)(?:/runs/([0-9a-f]{32}))?")
+_PAGE_CSP = ("default-src 'none'; style-src 'self'; img-src 'self'; "
+             "frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
+_FAVICON_STYLE_HASH = b64encode(sha256(render.FAVICON_CSS.encode()).digest()).decode("ascii")
+_FAVICON_CSP = (f"default-src 'none'; style-src 'sha256-{_FAVICON_STYLE_HASH}'; "
+                "frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
 
 
 @dataclass(frozen=True)
@@ -23,6 +30,7 @@ class Response:
     status: int
     body: bytes
     content_type: str = "text/html; charset=utf-8"
+    content_security_policy: str = _PAGE_CSP
 
 
 class Application:
@@ -47,6 +55,8 @@ class Application:
         try:
             if path == "/style.css":
                 return Response(200, render.CSS.encode(), "text/css; charset=utf-8")
+            if path == "/favicon.svg":
+                return Response(200, render.favicon().encode(), "image/svg+xml", _FAVICON_CSP)
             cached = self.cache.get(path)
             if cached and time.monotonic() - cached[0] < CACHE_SECONDS:
                 self.cache.move_to_end(path)
@@ -147,8 +157,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(response.body)))
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
-        self.send_header("Content-Security-Policy",
-                         "default-src 'none'; style-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
+        self.send_header("Content-Security-Policy", response.content_security_policy)
         self.end_headers()
         self.wfile.write(response.body)
 

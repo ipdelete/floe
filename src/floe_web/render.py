@@ -5,62 +5,78 @@ from html import escape
 from shlex import quote as shell_arg
 from urllib.parse import quote
 
-from .assets import icon_svg
+from .assets import icon_svg, logo_svg
+
+# This CSS is used only in the standalone favicon, never in the inline header mark.
+FAVICON_CSS = ":root{color:#171717}@media(prefers-color-scheme:dark){:root{color:#fff}}"
 
 CSS = """
-:root { color-scheme: light; font-family: system-ui, sans-serif; color: #222; background: white; }
-body { max-width: 64rem; margin: 1.5rem auto; padding: 0 1rem; line-height: 1.5; }
-a { color: #195cab; text-underline-offset: .15em; }
+:root { color-scheme: light; font-family: system-ui, sans-serif; --ink: #171717; --muted: #666; --line: #e8e8e8; color: var(--ink); background: white; }
+body { max-width: 64rem; margin: 2rem auto; padding: 0 1rem; line-height: 1.5; }
+a { color: var(--ink); text-decoration-color: #8a8a8a; text-decoration-thickness: 1px; text-underline-offset: .2em; }
+a:hover { text-decoration-color: currentColor; }
+:focus-visible { outline: 2px solid var(--ink); outline-offset: 4px; }
+::selection { color: white; background: var(--ink); }
+header a, main > nav a, td a { text-decoration: none; }
+header a:hover, main > nav a:hover, td a:hover,
+header a:focus-visible, main > nav a:focus-visible, td a:focus-visible { text-decoration: underline; text-decoration-thickness: 1px; }
+td a { font-weight: 500; }
+.inventory td:first-child > .cell > a { font-weight: 600; }
+time, table { font-variant-numeric: tabular-nums; }
 .lucide { display: inline-block; width: 1rem; height: 1rem; margin-inline-end: .35em; vertical-align: -.125em; flex-shrink: 0; }
+.floe-mark { width: 1.25rem; height: 1.25rem; margin-inline-end: .4rem; flex-shrink: 0; }
 main { overflow-wrap: anywhere; }
 .skip-link { position: absolute; top: -5rem; }
-.skip-link:focus { top: .5rem; z-index: 1; background: white; padding: .5rem; border: 1px solid #195cab; }
+.skip-link:focus { top: .5rem; z-index: 1; background: white; padding: .5rem; border: 1px solid var(--ink); }
 :target { scroll-margin-top: 1rem; }
-.log-group:target { outline: 1px solid #195cab; }
-header { display: flex; justify-content: space-between; align-items: center; gap: 1rem; border-bottom: 1px solid #ddd; }
+.log-group:target { outline: 2px solid var(--ink); outline-offset: -2px; background: #f2f2f2; }
+header { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 1rem; padding-bottom: .75rem; margin-bottom: 1.75rem; border-bottom: 1px solid var(--line); }
 header a { display: inline-flex; align-items: center; min-height: 44px; font-weight: 600; }
-.refresh { display: flex; align-items: center; justify-content: end; gap: 1rem; flex-wrap: wrap; }
-.updated { color: #666; font-size: .8rem; }
-main > nav { margin-top: 1rem; }
-h1 { font-size: 1.5rem; margin-bottom: .5rem; }
-h2 { font-size: 1.1rem; margin-top: 2rem; }
+.refresh { display: flex; flex: 1; align-items: center; justify-content: end; gap: 1rem; flex-wrap: wrap; }
+.refresh > a { font-size: .875rem; font-weight: 500; }
+.updated { color: var(--muted); font-size: .8rem; }
+main > nav { margin: 0 0 1rem; font-size: .875rem; }
+h1 { font-size: 1.75rem; font-weight: 600; letter-spacing: -.025em; line-height: 1.2; margin: 0 0 1.25rem; }
+h2 { font-size: 1.1rem; font-weight: 600; margin: 2.25rem 0 .75rem; }
 .scroll { overflow-x: auto; }
 table { width: 100%; border-collapse: collapse; text-align: left; }
-th, td { padding: .65rem .8rem .65rem 0; border-bottom: 1px solid #e8e8e8; vertical-align: top; }
-th { font-weight: 600; overflow-wrap: normal; }
+th, td { padding: .9rem 1rem .9rem 0; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font-size: .8125rem; font-weight: 500; color: var(--muted); overflow-wrap: normal; }
 .cell { min-width: 0; overflow-wrap: anywhere; }
 pre, code, .logs { font-family: ui-monospace, monospace; font-size: .9rem; }
-pre { padding: 1rem; background: #fafafa; border: 1px solid #e8e8e8; white-space: pre-wrap; overflow-wrap: anywhere; }
+pre { padding: 1rem; background: #fafafa; border: 1px solid var(--line); white-space: pre-wrap; overflow-wrap: anywhere; }
 code { overflow-wrap: anywhere; }
-.muted, footer, .systemd { color: #666; }
+.muted, footer, .systemd { color: var(--muted); }
 .run-meta, .timer-state { font-size: .85rem; margin-top: .2rem; }
-.log-group { display: flex; flex-wrap: wrap; justify-content: space-between; gap: .5rem; padding: .7rem .8rem .3rem; border-top: 1px solid #e8e8e8; font-family: system-ui, sans-serif; }
+.log-group { display: flex; flex-wrap: wrap; justify-content: space-between; gap: .5rem; padding: .7rem .8rem .3rem; border-top: 1px solid var(--line); font-family: system-ui, sans-serif; }
 .log-group strong { min-width: 0; overflow-wrap: anywhere; }
 .log-group a { font-size: .8rem; }
 .succeeded { color: #226b36; } .failed { color: #a32020; }
 .running, .incomplete { color: #805500; }
 .cell span.succeeded, .cell span.failed, .cell span.running, .cell span.incomplete { white-space: nowrap; }
 .warning { border-left: 3px solid #a77719; padding-left: .8rem; overflow-wrap: anywhere; }
-.logs { list-style: none; padding: .5rem 0; background: #fafafa; border: 1px solid #e8e8e8; }
+.logs { list-style: none; padding: .5rem 0; background: #fafafa; border: 1px solid var(--line); }
 .log-line { display: grid; grid-template-columns: 5rem 7rem minmax(0, 1fr); gap: .25rem .75rem; padding: .3rem .8rem; }
-.log-time { color: #666; }
+.log-time { color: var(--muted); }
 .log-task, .log-message { min-width: 0; overflow-wrap: anywhere; }
 .log-message { white-space: pre-wrap; }
-.log-date { padding: .5rem .8rem; color: #666; font-family: system-ui, sans-serif; font-size: .8rem; }
-summary { cursor: pointer; padding: .5rem 0; }
-footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid #ddd; font-size: .85rem; }
+.log-date { padding: .5rem .8rem; color: var(--muted); font-family: system-ui, sans-serif; font-size: .8rem; }
+summary { cursor: pointer; padding: .5rem 0; font-weight: 500; }
+summary:hover { color: var(--ink); }
+footer { margin-top: 3rem; padding-top: 1.25rem; border-top: 1px solid var(--line); font-size: .8125rem; }
 @media (max-width: 640px) {
+  body { margin-block: 1rem; }
+  header { margin-bottom: 1.5rem; }
   .updated { max-width: 10rem; text-align: right; }
   .refresh { gap: .5rem; }
   .inventory, .inventory tbody, .inventory tr { display: block; }
   .inventory thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
-  .inventory tr { padding: .7rem 0; border-bottom: 1px solid #ddd; }
+  .inventory tr { padding: .85rem 0; border-bottom: 1px solid var(--line); }
   .inventory td { display: flex; flex-wrap: wrap; gap: .2rem .5rem; padding: .3rem 0; border: 0; }
-  .inventory td::before { content: attr(data-label); color: #666; flex: 0 0 6rem; }
+  .inventory td::before { content: attr(data-label); color: var(--muted); font-size: .8125rem; padding-top: .15rem; flex: 0 0 6rem; }
   .inventory .cell { flex: 1 1 10rem; }
   .inventory td:first-child { display: block; }
   .inventory td:first-child::before { content: none; }
-  .inventory td:first-child > .cell > a { font-weight: 600; }
   .log-line { grid-template-columns: 4.5rem minmax(0, 1fr); gap: .1rem .5rem; }
   .log-message { grid-column: 2; }
 }
@@ -76,6 +92,15 @@ def icon(name):
     # Keep upstream files intact; omit only the leading license comment in markup.
     svg = source[source.index("<svg"):].strip()
     return svg.replace("<svg", '<svg aria-hidden="true" focusable="false"', 1)
+
+
+def brand_link():
+    svg = logo_svg().replace("<svg", '<svg class="floe-mark" aria-hidden="true" focusable="false"', 1)
+    return '<a href="/">' + svg + 'Floe</a>'
+
+
+def favicon():
+    return logo_svg().replace("<title>", f"<style>{FAVICON_CSS}</style><title>", 1)
 
 
 def link(url, label, *, icon_name=None):
@@ -184,20 +209,13 @@ def document(title, body, path):
     return ("<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
             '<meta name="viewport" content="width=device-width, initial-scale=1">'
             f"<title>{text(title)} · Floe</title><link rel=\"stylesheet\" href=\"/style.css\">"
-            '</head><body><a class="skip-link" href="#content">Skip to content</a><header>' + link("/", "Floe")
+            '<link rel="icon" type="image/svg+xml" sizes="any" href="/favicon.svg">'
+            '</head><body><a class="skip-link" href="#content">Skip to content</a><header>' + brand_link()
             + '<div class="refresh"><span class="updated">Updated '
             + time_element(now, f"{now:%H:%M:%S %Z}") + "</span>" + link(path, "Refresh", icon_name="refresh-cw") + "</div>"
             + f'</header><main id="content" tabindex="-1">{body}</main>'
-            f'<footer>Read-only · Times: {text(timezone_label(now))} (server local).'
-            '<details><summary>History and display limits</summary>'
-            "<p>Inventory and workflow pages discover journal activity in the last 7 days, "
-            "with up to 20 runs on a workflow page. Each selected run shows its newest 1,000 "
-            "journal records; partial history is marked. Messages over 2,000 characters and "
-            "errors over 8,000 characters are shortened. Pages are cached for up to 3 seconds. "
-            "History depends on journal retention. Schedules use local time unless they specify a timezone. "
-            "Timer activity and enablement are separate from run results; unavailable state is not disabled. "
-            "Use the CLI for unabridged logs.</p>"
-            "</details></footer></body></html>").encode("utf-8")
+            f'<footer>Read-only · Times: {text(timezone_label(now))} (server local).</footer>'
+            '</body></html>').encode("utf-8")
 
 
 def inventory(summaries):

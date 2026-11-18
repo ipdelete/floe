@@ -1,4 +1,4 @@
-"""The vendored icon subset is inert, packaged, and always paired with text."""
+"""Original branding and vendored utility icons are inert, packaged, and labeled."""
 
 from html.parser import HTMLParser
 from importlib.resources import files
@@ -7,7 +7,7 @@ from xml.etree import ElementTree
 import pytest
 
 from floe_web import render
-from floe_web.assets import ICON_NAMES, icon_svg
+from floe_web.assets import ICON_NAMES, icon_svg, logo_svg
 
 
 class Markup(HTMLParser):
@@ -83,6 +83,45 @@ def test_navigation_icons_do_not_replace_labels_or_add_controls():
     assert "Refresh" in page.words and "Floe" in page.words
     assert any("lucide-refresh-cw" in attrs.get("class", "") for tag, attrs in page.elements if tag == "svg")
     assert not any(tag in ("script", "img", "button") for tag, _ in page.elements)
+
+
+def test_original_logo_keeps_the_chosen_two_piece_floe_first_geometry():
+    root = ElementTree.fromstring(logo_svg())
+    assert root.get("viewBox") == "0 0 32 32" and root.get("fill") == "currentColor"
+    assert [node.get("d") for node in root if node.tag.endswith("}path")] == [
+        "M6 4H24L28 8L24 14H8L4 10Z", "M6 18H16L20 22L16 28H6L4 24Z"]
+    assert {node.tag.rsplit("}", 1)[-1] for node in root.iter()} == {"svg", "title", "path"}
+    assert all(not key.startswith("on") and "href" not in key for node in root.iter() for key in node.attrib)
+
+
+def test_brand_link_keeps_visible_floe_label_and_hides_only_the_mark():
+    anchor = ElementTree.fromstring(render.brand_link())
+    assert anchor.tag == "a" and anchor.get("href") == "/"
+    [svg] = anchor
+    assert svg.tail == "Floe"  # Real text outside the decorative SVG.
+    assert svg.get("class") == "floe-mark" and svg.get("fill") == "currentColor"
+    assert svg.get("aria-hidden") == "true" and svg.get("focusable") == "false"
+    original = ElementTree.fromstring(logo_svg())
+    assert [(node.tag, node.attrib) for node in svg] == [(node.tag, node.attrib) for node in original]
+
+
+def test_every_document_links_the_local_svg_favicon_without_inline_page_styles():
+    markup = Markup(render.document("Workflows", "<h1>Workflows</h1>", "/").decode())
+    assert [attrs for tag, attrs in markup.elements if tag == "link" and attrs.get("rel") == "icon"] == [
+        {"rel": "icon", "type": "image/svg+xml", "sizes": "any", "href": "/favicon.svg"}]
+    assert len([attrs for tag, attrs in markup.elements if tag == "svg" and attrs.get("class") == "floe-mark"]) == 1
+    assert not any(tag in ("style", "script", "img") for tag, _ in markup.elements)
+
+
+def test_favicon_reuses_logo_geometry_and_limits_styles_to_the_standalone_image():
+    favicon = ElementTree.fromstring(render.favicon())
+    original = ElementTree.fromstring(logo_svg())
+    assert [(node.tag, node.attrib) for node in favicon if not node.tag.endswith("}style")] == [
+        (node.tag, node.attrib) for node in original]
+    [style] = [node for node in favicon if node.tag.endswith("}style")]
+    assert style.text == render.FAVICON_CSS
+    assert "prefers-color-scheme:dark" in style.text
+    assert "<style>" not in logo_svg() and "<style>" not in render.brand_link()
 
 
 def test_unknown_status_stays_text_only_and_escaped():

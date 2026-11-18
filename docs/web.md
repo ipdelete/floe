@@ -20,8 +20,14 @@ statuses. Icons render inline beside visible text, inherit the existing colors,
 and remain static even for running workflows: the page is a snapshot, not a
 live stream. They are hidden from assistive technology and cannot receive focus.
 The SVGs and their ISC/MIT notices are bundled under `src/floe_web/icons/`;
-no icon package, font, CDN request, or JavaScript is needed. The Floe wordmark
-is unchanged.
+no icon package, font, CDN request, or JavaScript is needed.
+
+Floe's original mark is two offset, filled ice-floe shapes, bundled separately
+as `src/floe_web/logo.svg`. It sits beside the existing Floe text in the home
+link, inherits its color, and is decorative to assistive technology. The same
+geometry supplies `/favicon.svg`, with dark ink for light browser color schemes
+and white ink for dark schemes. This is an SVG-only favicon; older browsers
+without SVG favicon support may show their default tab icon.
 
 ## Pages
 
@@ -38,22 +44,24 @@ is unchanged.
   ID so multiple run tabs remain distinguishable.
 
 Timestamps use the server's local timezone, with the zone and UTC offset
-labeled in a compact footer. Calendar interpretation details live in the
-**History and display limits** disclosure rather than above every table.
-Today/tomorrow labels on the inventory and next-run times
+labeled alongside the read-only reminder in a compact, non-expandable footer.
+History limits and calendar interpretation are documented here rather than
+repeated in each page's footer. Today/tomorrow labels on the inventory and next-run times
 also use the server's local date, not the browser's. Calendar expressions are
 shown verbatim: systemd uses local time unless an expression specifies its own
 timezone. Each HTML `<time>` retains its precise timestamp and has a full local
 timestamp with offset in its title; historical timestamps use their applicable
 DST offset. The header shows when the page was rendered.
 
-Navigation uses ordinary links; use **Refresh** or your browser's reload button
-to update a page. There is no automatic refresh or live log streaming. Pages
+The white interface uses black branding and navigation, with color reserved for
+status. Inline links stay underlined; header, back-navigation, and table links
+underline on hover or keyboard focus. Keyboard focus has a visible black outline.
+Navigation still uses ordinary links; use **Refresh** or your browser's reload
+button to update a page. There is no automatic refresh or live log streaming. Pages
 and inventory are cached in memory for up to three seconds; the page cache
-retains at most 16 pages. Nothing is cached on disk. A native **History and
-display limits** disclosure contains the retention, caching, and query-limit
-notes, while actual partial-history warnings remain visible. A keyboard skip
-link goes directly to the main content.
+retains at most 16 pages. Nothing is cached on disk. Actual partial-history and
+query-error warnings remain visible where they apply. A keyboard skip link goes
+directly to the main content.
 
 Inventory and workflow pages discover runs with journal activity in the last
 seven days. "No recent runs" does not mean a workflow has never run. A saved
@@ -110,8 +118,11 @@ users or processes that can connect may read the same dashboard; loopback is
 not per-user access control. Logs can contain secrets, so do not expose or
 forward the port to untrusted clients.
 
-Workflow names, errors, and logs are escaped as text. The server provides no
-write routes, arbitrary file serving, DAG visualization, or definition editor.
+Workflow names, errors, and logs are escaped as text. Page security policy blocks
+scripts and inline styles, and permits images only from the same origin. Only
+the favicon response allows its exact, hash-identified light/dark CSS; this does
+not allow inline styles in dashboard pages. Asset routes are fixed, not arbitrary
+file serving. The server provides no write routes, DAG visualization, or definition editor.
 `incomplete` remains distinct from `failed`; query failures are shown as
 problems or HTTP errors rather than empty successful results. Journald
 retention still determines which history exists.
