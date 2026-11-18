@@ -165,7 +165,7 @@ This disables the timer and deletes both unit files. Your workflow file and
 ## Next steps
 
 - [Workflows](workflows.md): the definition rules, and patterns for workflows
-  that run unattended, with no retries.
+  that run unattended, with optional bounded task retries.
 - [The service environment](deployment.md#the-service-environment): read this
   if a workflow works with `floe run` but fails under systemd.
 - [History](history.md): run statuses and what `floe logs` shows.

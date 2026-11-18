@@ -1,6 +1,6 @@
 """Execute a validated workflow in-process, reporting lifecycle events.
 
-Standard library only: systemd runs this with the system Python. Events go to
+Tenacity provides bounded task-call retries. Events go to
 the caller's `on_event` callback; serializing them (e.g. JSON lines for
 journald) is the UI's job.
 """
@@ -9,7 +9,10 @@ import inspect
 import os
 import uuid
 from collections.abc import Callable
+from concurrent.futures import CancelledError
 from datetime import UTC, datetime
+
+from tenacity import Retrying, retry_if_exception_type, stop_after_attempt, wait_fixed
 
 from .model import Event, ValidationError, Workflow
 
@@ -47,22 +50,72 @@ def run(workflow: Workflow, on_event: Callable[[Event], object], *, run_id: str 
 def _run(workflow: Workflow, on_event: Callable[[Event], object], run_id: str) -> bool:
     def emit(event, **fields) -> None:
         on_event(Event(event=event, workflow=workflow.name, run_id=run_id,
-                       timestamp=datetime.now(UTC).isoformat(), **fields))
+                       timestamp=datetime.now(UTC).isoformat(),
+                       schema=2 if workflow.retries else 1, **fields))
 
     emit("run_started")
     for name in workflow.order:
         emit("task_started", task=name)
-        try:
-            result = workflow.tasks[name]()
-            if inspect.isawaitable(result) or inspect.isasyncgen(result):
-                if inspect.iscoroutine(result):
-                    result.close()
-                kind = "an async generator" if inspect.isasyncgen(result) else "an awaitable"
-                raise ValidationError([f"task {name!r} returned {kind}; tasks must be synchronous"])
-        except Exception as exc:
-            emit("task_completed", task=name, status="failed", error=str(exc))
-            emit("run_completed", status="failed", error=str(exc))
-            return False
+        policy = workflow.retries.get(name)
+        if policy is None:
+            # Keep the original event sequence for unconfigured tasks.
+            try:
+                _check_result(workflow.tasks[name](), name)
+            except Exception as exc:
+                emit("task_completed", task=name, status="failed", error=str(exc))
+                emit("run_completed", status="failed", error=str(exc))
+                return False
+        else:
+            def before_sleep(state):
+                emit("retry_scheduled", task=name, attempt=state.attempt_number,
+                     max_attempts=policy.max_attempts, delay_seconds=state.next_action.sleep)
+
+            retrying = Retrying(stop=stop_after_attempt(policy.max_attempts),
+                                wait=wait_fixed(policy.delay_seconds),
+                                retry=retry_if_exception_type(policy.retry_on),
+                                before_sleep=before_sleep, retry_error_callback=lambda state: None)
+            # Tenacity owns counting, waits, and exhaustion. Its context catches
+            # ONLY task-call errors, never callbacks or synchronous validation.
+            error = None
+            reason = "exhausted"
+            for attempt in retrying:
+                number = attempt.retry_state.attempt_number
+                fields = dict(task=name, attempt=number, max_attempts=policy.max_attempts)
+                emit("attempt_started", **fields)
+                result = None
+                with attempt:
+                    result = workflow.tasks[name]()
+                outcome = attempt.retry_state.outcome
+                error = outcome.exception() if outcome.failed else None
+                if error is not None and (not isinstance(error, Exception) or isinstance(error, CancelledError)):
+                    raise error
+                if error is None:
+                    try:
+                        _check_result(result, name)
+                    except Exception as exc:
+                        error = exc
+                        retryable = False
+                    else:
+                        emit("attempt_completed", **fields, status="succeeded")
+                        break
+                else:
+                    retryable = isinstance(error, policy.retry_on)
+                emit("attempt_completed", **fields, status="failed", error=str(error))
+                if not retryable:
+                    reason = "non_retryable"
+                    break
+            if error is not None:
+                emit("task_completed", task=name, status="failed", error=str(error), failure_reason=reason)
+                emit("run_completed", status="failed", error=str(error))
+                return False
         emit("task_completed", task=name, status="succeeded")
     emit("run_completed", status="succeeded")
     return True
+
+
+def _check_result(result: object, name: str) -> None:
+    if inspect.isawaitable(result) or inspect.isasyncgen(result):
+        if inspect.iscoroutine(result):
+            result.close()
+        kind = "an async generator" if inspect.isasyncgen(result) else "an awaitable"
+        raise ValidationError([f"task {name!r} returned {kind}; tasks must be synchronous"])

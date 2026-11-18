@@ -32,6 +32,11 @@ Templates in `.agents/templates/` are starting points, not required forms. Small
 
 For consequential choices, maintain an effort-local `decisions.md`. Capture decisions as they occur, then reconcile at session end. See `.agents/templates/decisions.md`. The design document presents the current architecture; the decision record preserves why choices were made and how they changed.
 
+## Current efforts
+
+- [Task retries](task-retries/decisions.md): approved policy/deployment direction,
+  event compatibility, and validation scope for issue #6.
+
 ## Source and updates
 
 Installed from [ipdelete/agentic-engineering-method](https://github.com/ipdelete/agentic-engineering-method)

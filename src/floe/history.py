@@ -14,7 +14,7 @@ from datetime import UTC, datetime, timedelta
 
 from .deploy import unit_names
 from .journal import Journal
-from .model import Event, LogLine, NotFoundError, Run, RunLogs, TaskRun, ValidationError
+from .model import AttemptRun, Event, LogLine, NotFoundError, Run, RunLogs, TaskRun, ValidationError
 from .systemd import Systemd
 
 __all__ = ["get_run", "list_runs", "run_logs"]
@@ -227,7 +227,24 @@ def _build_run(workflow: str, invocation: str, records: list[dict], running: boo
             tasks[event.task] = TaskRun(event.task, "running", started=when)
         elif event.event == "task_completed" and event.task:
             task = tasks.get(event.task) or TaskRun(event.task, "failed")
-            tasks[event.task] = replace(task, status=event.status or "failed", finished=when, error=event.error)
+            tasks[event.task] = replace(task, status=event.status or "failed", finished=when,
+                                        error=event.error, retry_at=None, failure_reason=event.failure_reason)
+        elif event.event in ("attempt_started", "attempt_completed", "retry_scheduled") and event.task:
+            task = tasks.get(event.task) or TaskRun(event.task, "running")
+            attempts = {attempt.number: attempt for attempt in task.attempts}
+            retry_at = None
+            if event.event == "retry_scheduled":
+                try:
+                    retry_at = when + timedelta(seconds=event.delay_seconds)
+                except OverflowError:
+                    retry_at = None
+            elif event.event == "attempt_started":
+                attempts[event.attempt] = AttemptRun(event.attempt, "running", started=when)
+            else:
+                attempt = attempts.get(event.attempt) or AttemptRun(event.attempt, "incomplete")
+                attempts[event.attempt] = replace(attempt, status=event.status, finished=when, error=event.error)
+            tasks[event.task] = replace(task, attempts=tuple(attempts[n] for n in sorted(attempts)),
+                                        max_attempts=event.max_attempts, retry_at=retry_at)
         elif event.event == "run_completed":
             completed = (event, when)
 
@@ -246,8 +263,10 @@ def _build_run(workflow: str, invocation: str, records: list[dict], running: boo
         status, finished, error = "incomplete", terminal_time, "no completion recorded"
     if status != "running":
         for name, task in tasks.items():
-            if task.status == "running":
-                tasks[name] = replace(task, status="incomplete")
+            tasks[name] = replace(task, status="incomplete" if task.status == "running" else task.status,
+                                  retry_at=None,
+                                  attempts=tuple(replace(a, status="incomplete") if a.status == "running"
+                                                 else a for a in task.attempts))
     return Run(workflow=workflow, run_id=invocation, status=status, started=started or (None if truncated else first),
                finished=finished, error=error, tasks=tuple(tasks.values()),
                result=result, truncated=truncated)
@@ -266,6 +285,7 @@ def _error_output(output: list[str], result: str | None) -> str | None:
 
 def _log_lines(workflow: str, invocation: str, records: Iterable[dict]) -> Iterator[LogLine]:
     task = None
+    attempt = None
     for record in records:
         when, message = _time(record), _message(record)
         priority = int(record.get("PRIORITY", 6))
@@ -274,12 +294,18 @@ def _log_lines(workflow: str, invocation: str, records: Iterable[dict]) -> Itera
             continue
         event = _event(record, workflow, invocation)
         if event is None:
-            yield LogLine(when, "output", message, task=task, priority=priority)
+            yield LogLine(when, "output", message, task=task, priority=priority, attempt=attempt)
             continue
         if event.event == "task_started":
             task = event.task
+            attempt = None
+        elif event.event == "attempt_started":
+            task, attempt = event.task, event.attempt
         # Every line uses journald's receive time, the clock of the order lines are
         # shown in; the event's own timestamp stays available in `event`.
-        yield LogLine(when, "event", message, task=event.task, priority=priority, event=event)
+        yield LogLine(when, "event", message, task=event.task, priority=priority,
+                      event=event, attempt=event.attempt)
+        if event.event in ("attempt_completed", "retry_scheduled"):
+            attempt = None
         if event.event == "task_completed":
-            task = None
+            task, attempt = None, None

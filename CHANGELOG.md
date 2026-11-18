@@ -5,6 +5,22 @@ moves into a dated version section when preparing a release PR.
 
 ## [Unreleased]
 
+### Added
+
+- Opt-in per-task `RetryPolicy` using Tenacity, with finite attempts, fixed delays,
+  explicit retryable exceptions, preserved attempt history and output attribution,
+  and CLI/dashboard retry states. Sequential execution remains unchanged.
+
+### Changed
+
+- Tenacity is now a required runtime dependency. Services use the absolute
+  installing Python environment instead of system Python. Keep that environment
+  available and reinstall existing workflows before starting them after upgrade;
+  see [migration guidance](docs/deployment.md#upgrade-existing-installations).
+- Retry-configured workflows emit schema-2 attempt events; unconfigured workflows
+  keep their schema-1 sequence. History reads both; JSON gains attempt fields.
+  Exact-key/schema-1-only consumers must update; see [compatibility](docs/history.md#attempt-history-and-json-compatibility).
+
 ### Fixed
 
 - Match lifecycle events to both workflow and invocation identity, so a different

@@ -55,7 +55,20 @@ The rules, enforced by `tests/test_boundaries.py`:
   It returns data types from `floe.model` (each has `to_dict()` for JSON) or
   raises `FloeError` subclasses with structured fields.
 - UIs use only the public API exported by `floe` (`floe.__all__`).
-- Everything is standard library only.
+- Tenacity is the sole third-party runtime dependency, confined to the runner's
+  retry mechanism. Floe owns policies, events, history, and deployment.
+
+`RetryPolicy(max_attempts, delay_seconds, retry_on)` is exported alongside
+`Workflow(..., retries={task_name: policy})`. Definition files expose the same
+optional `retries` mapping. `Workflow` snapshots it and aggregates invalid policy
+fields with other definition problems. `TaskRun.attempts` contains exported
+`AttemptRun` records, with no synthetic attempts for old history. See
+[retry semantics](workflows.md#opt-into-task-retries) and
+[event/JSON compatibility](history.md#attempt-history-and-json-compatibility).
+
+`Deployment.python` defaults to the current interpreter's absolute, non-resolved
+path. Planning validates Python/dependency imports without loading workflow code
+in that subprocess. See [environment lifetime and migration](deployment.md#upgrade-existing-installations).
 
 Workflow loading and task execution temporarily change Python's process-global
 import state. Use them serially, not concurrently with other threads importing

@@ -3,13 +3,14 @@
 A minimal local workflow runner using Python, systemd timers, and journald.
 Tasks are Python functions executed sequentially in dependency order. systemd
 handles scheduling and process lifecycle; journald stores execution history.
-Floe uses only the Python standard library. There are no retries or parallel
-execution.
+Tasks can opt into bounded retries using Tenacity, Floe's only runtime dependency.
+There is no parallel execution.
 
 ## Requirements
 
 - Linux with systemd and a user systemd session
-- Python 3.14 or newer; deployed services also require `/usr/bin/python3` to be 3.14 or newer
+- Python 3.14 or newer; deployed services use the installing Python environment,
+  which must remain available with Floe and Tenacity installed
 - `systemctl`, `journalctl`, and `systemd-analyze` (for deployment calendar/timeout validation)
 - [uv](https://docs.astral.sh/uv/) to install the `floe` command
 

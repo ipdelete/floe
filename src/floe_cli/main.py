@@ -64,14 +64,18 @@ def _parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="cmd", required=True, metavar="COMMAND")
 
     definition = "workflow definition file, or the name of an installed workflow"
-    p = sub.add_parser("run", help="run a workflow now in this process, printing JSON events")
+    p = sub.add_parser("run", help="run a workflow now in this process, printing JSON events",
+                       description="Run sequentially with optional per-task RetryPolicy definitions. "
+                                   "Events go to stdout; task output to stderr. No overall timeout outside systemd.")
     _add_target(p, definition)
     p.set_defaults(handler=_run)
 
-    p = sub.add_parser("install", help="write unit files, reload systemd, enable the timer")
+    p = sub.add_parser("install", help="write unit files, reload systemd, enable the timer",
+                       description="Bind services to this Python environment, which must remain available "
+                                   "with Floe and Tenacity. Reinstall after changing environments.")
     _add_target(p, f"{definition} (to reinstall)")
     p.add_argument("--adopt", action="store_true", help="take over existing unit files not written by floe")
-    p.add_argument("--dry-run", action="store_true", help="show what would change and do nothing")
+    p.add_argument("--dry-run", action="store_true", help="inspect and validate without writes or service-manager calls")
     p.set_defaults(handler=_install)
 
     target = "workflow definition file or installed workflow name"
@@ -339,19 +343,29 @@ def _note_if_not_installed(name: str, ctx) -> None:
 def _detail(run: floe.Run) -> str:
     task = run.failed_task
     if run.status == "running":
-        current = next((t.name for t in run.tasks if t.status == "running"), None)
-        return f"running {current}" if current else ""
+        current = next((t for t in run.tasks if t.status == "running"), None)
+        if current:
+            if current.retry_at:
+                return f"{current.name}: waiting to retry at {_local(current.retry_at)}"
+            suffix = (f" attempt {current.attempts[-1].number}/{current.max_attempts}"
+                      if current.attempts else "")
+            return f"running {current.name}{suffix}"
+        return ""
     if task and run.status != "succeeded":
-        return f"{task.name}: {task.error or task.status}"
+        reason = f" ({task.failure_reason})" if task.failure_reason else ""
+        return f"{task.name}: {task.error or task.status}{reason}"
     if run.status != "succeeded" and run.error:
         return " ".join(line.strip().removeprefix("- ") for line in run.error.splitlines())
-    return ""
+    return "; ".join(f"{t.name}: succeeded after {t.attempts[-1].number} attempts"
+                     for t in run.tasks if t.status == "succeeded" and t.attempts
+                     and t.attempts[-1].number > 1)
 
 
 def _describe(line: floe.LogLine) -> str:
     event = line.event
     if event is None:
-        prefix = f"[{line.task}] " if line.task else ""
+        label = f"{line.task} attempt {line.attempt}" if line.attempt else line.task
+        prefix = f"[{label}] " if label else ""
         return f"systemd: {line.message}" if line.kind == "systemd" else f"{prefix}{line.message}"
     if event.event == "run_started":
         return "▶ run started"
@@ -359,7 +373,15 @@ def _describe(line: floe.LogLine) -> str:
         return f"■ run {event.status}" + (f": {event.error}" if event.error else "")
     if event.event == "task_started":
         return f"▶ {event.task} started"
-    return f"■ {event.task} {event.status}" + (f": {event.error}" if event.error else "")
+    if event.event == "retry_scheduled":
+        return f"↻ {event.task}: waiting {event.delay_seconds:g}s before attempt {event.attempt + 1}/{event.max_attempts}"
+    label = event.task
+    if event.attempt:
+        label += f" attempt {event.attempt}/{event.max_attempts}"
+    if event.event == "attempt_started":
+        return f"▶ {label} started"
+    reason = f" ({event.failure_reason})" if event.failure_reason else ""
+    return f"■ {label} {event.status}{reason}" + (f": {event.error}" if event.error else "")
 
 
 def _format_table(header: tuple[str, ...], rows: list[tuple[str, ...]]) -> list[str]:

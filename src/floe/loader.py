@@ -105,6 +105,7 @@ def load(path: str | Path) -> Workflow:
                 dag=namespace["dag"],
                 schedule=namespace.get("SCHEDULE", ()),
                 source=path,
+                retries=namespace.get("retries", {}),
             )
     except (LoadError, ValidationError):
         raise

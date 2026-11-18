@@ -1,8 +1,8 @@
 """feedwatch: fetch feeds, let an agent (pi) triage new items, publish its decisions.
 
 Requires pi (https://pi.dev) with a model login; see README.md in this directory.
-Floe itself needs only the standard library, and so does this workflow, but pi
-needs Node.js.
+Beyond Floe's Tenacity dependency, this workflow uses only the standard library;
+pi needs Node.js.
 
 - The agent gets no tools and only the item text; feed content is untrusted,
   and so is the agent's reply, which must hold exactly one valid decision per

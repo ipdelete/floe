@@ -82,12 +82,41 @@ links are still removed, and other cleanup steps continue. Rerunning the command
 continues the interrupted uninstall, including units whose files are gone but
 are still loaded. Same-named units loaded from other directories are not touched.
 
-The generated service runs `/usr/bin/python3 -m floe_cli run <path>/workflow.py`
-with `PYTHONPATH` pointing at Floe's source directory, the script's directory
-as working directory, `TimeoutStartSec=30min` (oneshot services have no start
-timeout by default) and `KillMode=control-group`. Because Floe is standard
-library only, the service does not need the virtual environment. Moving the
-repository or the workflow file requires `install` again.
+The generated service runs `<installing-python> -m floe_cli run <path>/workflow.py`
+using the absolute interpreter path of the Python environment running
+`floe install`. Virtualenv symlinks are preserved, not resolved to a base Python.
+`PYTHONPATH` points at Floe's package directory; the script's directory is the
+working directory. `TimeoutStartSec=30min` bounds the entire workflow, including
+retry attempts and waits, and `KillMode=control-group` stops its child processes.
+The library's explicit `Deployment(python=...)` override must also provide Python
+3.14+, Floe and Tenacity. Planning validates imports in that environment with a
+bounded subprocess, without executing the workflow there or contacting systemd.
+
+The interpreter appears as `Python=` in service `[X-Floe]` metadata and in the
+dry-run command. No shell activation, package installation, `uv` invocation, or
+environment creation occurs when the timer runs. Keep the environment available
+for the lifetime of the installation. Moving/deleting it, moving the repository,
+or moving the workflow file requires `install` again. Installing with a temporary
+`uv run --with ...` environment is not a durable deployment strategy.
+
+### Upgrade existing installations
+
+Old units used system Python without an environment and will not automatically
+find Tenacity after upgrading Floe. Before starting them again:
+
+1. Install/sync Floe and Tenacity into a durable Python 3.14+ environment (`uv sync`
+   for a checkout, or `uv tool install` for a release wheel).
+2. From that environment run `floe install --dry-run <name>`, inspect the interpreter
+   and paths, then `floe install <name>` to update the units. Repeat per workflow.
+3. Use `floe list --check` to find outstanding migration or definition problems.
+   Restart a running dashboard separately after upgrading its Python package.
+
+Metadata-only `floe list` flags legacy interpreter metadata, missing executables,
+and interpreters different from the current Floe environment; it does not import
+definitions or probe their dependencies. Planning checks dependency availability.
+If the old environment is gone, reinstall from the new one. Uninstall-by-name and
+history remain available even after environment or definition deletion; neither
+requires executing the old interpreter. Existing journal history is still readable.
 
 The service is `Type=oneshot`: activating it while it is already running does
 not create an overlapping run. Direct `floe run` invocations are not covered
@@ -109,19 +138,21 @@ finds. Under systemd:
 - `HOME`, `USER`, `XDG_RUNTIME_DIR` and the session bus
   (`DBUS_SESSION_BUS_ADDRESS`) are set. The locale can differ from your shell's,
   for example `LANG=C.UTF-8`. There is no terminal.
-- Python is `/usr/bin/python3` without a virtual environment: workflow code can
-  import the standard library, modules next to the workflow file, and packages
-  installed for the system Python.
+- Python is the recorded installing interpreter: workflow code can import the
+  standard library, sibling modules, and packages installed in that environment.
+  The service does not inherit the invoking shell's `VIRTUAL_ENV` or activated PATH;
+  use absolute executable paths for tools, including Python child processes.
 
 `systemctl --user show-environment` shows the environment services start
 from. To try a workflow in that environment before installing it, run it as a
 transient unit. This executes its tasks, like `floe run`; `PYTHONPATH` is the
-`Floe=` directory shown by `floe install --dry-run`:
+`Floe=` directory shown by `floe install --dry-run`. Use the recorded `Python=`
+interpreter (the example assumes a checkout installed with `uv sync`):
 
 ```bash
 systemd-run --user --wait --pipe --collect \
     -p WorkingDirectory="$PWD" -E PYTHONPATH="$HOME/src/floe/src" \
-    /usr/bin/python3 -m floe_cli run "$PWD/workflow.py"
+    "$PWD/.venv/bin/python" -m floe_cli run "$PWD/workflow.py"
 ```
 
 ## Schedule executions

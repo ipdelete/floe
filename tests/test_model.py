@@ -130,7 +130,7 @@ def test_event_schema_round_trip(kind, task, status):
 
 
 @pytest.mark.parametrize("changes", [
-    {"schema": True}, {"schema": 1.0}, {"schema": 2},
+    {"schema": True}, {"schema": 1.0}, {"schema": 3},
     {"event": "unknown"}, {"event": []},
     {"workflow": ""}, {"run_id": ""}, {"timestamp": ""},
     {"timestamp": "not a date"}, {"timestamp": "2026-01-01T00:00:00"},
@@ -148,7 +148,7 @@ def test_event_schema_rejects_malformed_records(changes):
 def test_event_dict_is_stable_schema():
     event = Event("task_completed", "demo", "r1", "2026-01-01T00:00:00+00:00", task="a", status="succeeded")
     assert event.to_dict() == {
-        "schema": 1, "event": "task_completed", "workflow": "demo", "run_id": "r1",
+        "schema": 2, "event": "task_completed", "workflow": "demo", "run_id": "r1",
         "timestamp": "2026-01-01T00:00:00+00:00", "task": "a", "status": "succeeded",
     }
     assert list(Event("run_started", "demo", "r1", "t").to_dict()) == [

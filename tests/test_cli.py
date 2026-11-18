@@ -91,7 +91,7 @@ def test_install_dry_run_prints_exact_files(flow, store, sd, capsys):
     out = capsys.readouterr().out
     for name in ("mydag.service", "mydag.timer"):
         assert f"# {store.path / name} (create)\n" in out
-    assert f"ExecStart=/usr/bin/python3 -m floe_cli run \"{flow}\"" in out
+    assert f"ExecStart={sys.executable} -m floe_cli run \"{flow}\"" in out
     assert not store.path.exists()
     assert sd.mock_calls == []
 
@@ -490,10 +490,10 @@ def test_console_script_installed(flow, tmp_path):
     assert not (tmp_path / "systemd").exists()
 
 
-def test_service_command_runs_with_system_python_and_no_venv(flow, tmp_path):
-    """Exactly what the generated unit runs: system python, PYTHONPATH=src, no site-packages."""
+def test_service_command_runs_with_installing_environment(flow, tmp_path):
+    """No shell activation or VIRTUAL_ENV is needed when using the absolute interpreter."""
     r = subprocess.run(
-        ["/usr/bin/python3", "-s", "-m", "floe_cli", "run", str(flow)],
+        [sys.executable, "-m", "floe_cli", "run", str(flow)],
         capture_output=True, text=True, cwd=tmp_path,
         env={"PYTHONPATH": str(ROOT / "src"), "PATH": "/usr/bin:/bin"},
     )

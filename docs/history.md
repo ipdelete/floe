@@ -45,6 +45,40 @@ journald received it; in `--json`, an event line's `event` also keeps the
 event's own timestamp, which run start, finish, and durations are based on.
 Runs of `floe run` outside systemd are not in the journal and do not appear.
 
+## Attempt history and JSON compatibility
+
+Workflows without a `retries` mapping keep the schema-1 lifecycle sequence.
+Workflows with retry policies emit schema 2: the existing run/task events plus
+`attempt_started`, `attempt_completed`, and `retry_scheduled`. Only configured
+tasks have attempt events. Readers accept both schemas; old history has an empty
+attempt list, not a synthesized successful or failed attempt.
+
+Each attempt event carries `task`, one-based `attempt`, and `max_attempts`.
+Attempt completions carry `status` (`succeeded` or `failed`) and an optional error.
+`retry_scheduled` carries the just-failed attempt number and `delay_seconds`;
+it is evidence of an intended wait, not proof another attempt started. Final
+retry-configured task failures carry `failure_reason`: `exhausted` or
+`non_retryable`. Interruption with no completion remains `incomplete`, not
+exhausted. Attempt identity is `(run_id, task, attempt)`.
+
+Run JSON adds task `attempts`, `max_attempts`, `retry_at`, and `failure_reason`.
+Each attempt has `number`, `status`, `started`, `finished`, and `error`. Missing
+starts remain null, including after journal truncation. Log JSON adds `attempt`
+(null when unknown/not executing an attempt). Failed attempts and their output
+are retained even when the final task/run succeeds. During waits, output has no
+attempt attribution. As before, child output delayed beyond its task/attempt
+boundary cannot reliably be assigned to its original writer.
+
+CLI summaries show current attempts, scheduled waits, exhaustion, and success
+after retries. Dashboard run pages show the current state and an expandable
+attempt history. Logs label each attempt's events and output.
+
+Consumers must accept additive JSON fields, understand schema 2 and its new
+event types, and avoid treating each failed attempt as a final task failure.
+Exact-key/schema-1-only consumers require updates. Schema 1 reads remain supported;
+malformed attempt events remain ordinary output. `EVENT_SCHEMA` is now 2 (latest
+supported schema), although unconfigured execution intentionally still emits 1.
+
 Journald is the only execution-history store. Retention depends on the machine's
 journal configuration and storage limits; logs may be rotated or lost across
 reboots without persistent journaling. The raw records are also available with

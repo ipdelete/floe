@@ -22,6 +22,8 @@ from .journal import Journal
 from .loader import load
 from .model import (
     EVENT_SCHEMA,
+    AttemptRun,
+    RetryPolicy,
     Event,
     FloeError,
     InstalledWorkflow,
@@ -46,7 +48,7 @@ from .store import UnitStore
 from .systemd import Systemd
 
 __all__ = [
-    "EVENT_SCHEMA", "Deployment", "Event", "FloeError", "InstallPlan", "InstalledWorkflow",
+    "AttemptRun", "RetryPolicy", "EVENT_SCHEMA", "Deployment", "Event", "FloeError", "InstallPlan", "InstalledWorkflow",
     "Journal", "LoadError", "LogLine", "NotFoundError", "NotOwnedError", "Run", "RunLogs",
     "Systemd", "SystemdError", "TaskRun", "UninstallError", "UnitChange", "UnitState",
     "UnitStore", "ValidationError", "Workflow", "WorkflowSummary", "apply", "check_installed",

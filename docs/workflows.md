@@ -52,8 +52,8 @@ values), before any task runs. When planning an installation, including
 `systemd-analyze` before either unit can be written. Direct execution does not
 need systemd tools.
 
-Tasks run one at a time. An exception stops the workflow, records failure, and
-returns a nonzero exit code. Tasks following the failure are not executed,
+Tasks run one at a time. Without a retry policy, an exception stops the workflow,
+records failure, and returns a nonzero exit code. Tasks following the failure are not executed,
 including independent tasks later in the execution order.
 
 stdout carries only Floe's events. Definition/import output is routed to stderr
@@ -85,17 +85,61 @@ While a run executes, the environment variable `FLOE_RUN_ID` holds its run ID,
 for tasks and the child processes they start. Use it to label files or records
 that a run produces; under systemd it matches the ID that `floe runs` shows.
 
+## Opt into task retries
+
+Define an optional `retries` mapping without changing `tasks` or `dag`:
+
+```python
+from floe import RetryPolicy
+
+retries = {
+    "fetch": RetryPolicy(
+        max_attempts=3,           # includes the initial call
+        delay_seconds=5,         # fixed, finite, nonnegative; zero is allowed
+        retry_on=(TimeoutError, ConnectionError),
+    ),
+}
+```
+
+Only named tasks retry; other tasks still run once. `max_attempts` must be a
+positive integer. `retry_on` must explicitly name a nonempty sequence of ordinary
+`Exception` subclasses. Select the exceptions your task's libraries actually
+raise. `(Exception,)` deliberately opts into broad matching, including programming
+errors; prefer specific transient failures. Malformed policies and unknown task
+names are reported alongside other definition errors, before execution.
+
+A retry calls only the failed task again, in the same process, retaining its
+in-memory and sibling-module state. Successful prerequisites are not rerun.
+Dependents wait for success. When attempts are exhausted or an exception is not
+retryable, the workflow fails and no later tasks run, including independent ones.
+There is no wait after the final attempt. Interrupts/cancellation are not retried;
+a cancellation during a retry wait stops without another attempt. Callback and
+Floe synchronous-return validation failures are never retried as task exceptions.
+
+Retries can repeat side effects; tasks must be safe to repeat. There is **no
+exactly-once guarantee**, rollback, fresh process, or automatic state reset.
+The deployed service's workflow timeout bounds attempts and waits together;
+direct `floe run` still has no overall timeout. Bound individual external calls.
+There are no workflow-wide retry defaults, exponential backoff, jitter, retries
+of whole workflows, or systemd `Restart=` retries.
+
+Retry-enabled workflows emit schema-2 attempt events; unconfigured workflows keep
+the existing schema-1 sequence. Failed attempts remain in history even after
+success. See [History](history.md#attempt-history-and-json-compatibility).
+
+[`examples/retries.py`](../examples/retries.py) demonstrates eventual success with
+no external calls or real retry delay.
+
 ## Write workflows that run unattended
 
-Scheduled runs happen while nobody watches, and Floe never retries. These
-patterns keep such workflows predictable:
+Scheduled runs happen while nobody watches. These patterns keep them predictable:
 
 - **Pass data through files.** Tasks take no arguments and return nothing.
   Write their results to files, for example in a `state/` directory next to the
   workflow file, and replace each file atomically (write a temporary file in the
   same directory, then `os.replace` it) so a crash never leaves half a file.
-- **The next run is the retry.** After a failure, the next scheduled run starts
-  from the beginning. Make tasks safe to repeat: record what was done, keyed by
+- **The next run starts afresh.** After final failure, the next scheduled run starts
+  from the beginning, whether or not tasks have retry policies. Make tasks safe to repeat: record what was done, keyed by
   a stable identity such as an item ID, and skip it next time.
 - **Save results before acting on them.** When computing a result is expensive
   or not repeatable, store it first; a run that fails while acting then leaves
