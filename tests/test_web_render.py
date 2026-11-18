@@ -154,17 +154,19 @@ def test_log_day_headers_disambiguate_midnight_and_dst_fold(timezone):
     assert content.text.count("01:30:00") == 2
 
 
-def test_updated_timestamp_and_limits_are_real_html_disclosures():
-    content = Content(render.document("Workflows", "<h1>Workflows</h1>", "/").decode())
-    assert "Updated" in content.text and "History and display limits" in content.text
-    assert "cached for up to 3 seconds" in content.text
-    assert "Schedules use local time unless they specify a timezone" in content.text
+def test_document_keeps_updated_time_and_quiet_footer_without_repeated_limits():
+    source = render.document("Workflows", "<h1>Workflows</h1>", "/").decode()
+    content = Content(source)
+    assert "Updated" in content.text
+    footer = Content(source.split("<footer>", 1)[1].split("</footer>", 1)[0])
+    assert footer.text == "Read-only · Times: UTC (UTC+00:00) (server local)."
+    assert not footer.elements
+    assert "History and display limits" not in content.text
     assert any(tag == "a" and attrs.get("href") == "#content" for tag, attrs in content.elements)
     assert ("main", {"id": "content", "tabindex": "-1"}) in content.elements
     assert any(tag == "time" and "datetime" in attrs and "title" in attrs
                for tag, attrs in content.elements)
-    assert any(tag == "details" and "open" not in attrs for tag, attrs in content.elements)
-    assert not any(tag == "script" for tag, _ in content.elements)
+    assert not any(tag in ("details", "script") for tag, _ in content.elements)
 
 
 @pytest.mark.parametrize("properties,expected", [

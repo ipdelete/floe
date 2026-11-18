@@ -25,7 +25,8 @@ def test_wheel_installs_with_icons_and_console_entry_point_outside_checkout(tmp_
     with ZipFile(wheel) as archive:
         expected = ROOT / "src" / "floe_web" / "icons"
         assert {name for name in archive.namelist() if name.endswith(".svg")} == {
-            f"floe_web/icons/{path.name}" for path in expected.glob("*.svg")}
+            "floe_web/logo.svg", *(f"floe_web/icons/{path.name}" for path in expected.glob("*.svg"))}
+        assert archive.read("floe_web/logo.svg") == (ROOT / "src/floe_web/logo.svg").read_bytes()
         for path in expected.iterdir():
             assert archive.read(f"floe_web/icons/{path.name}") == path.read_bytes()
 
@@ -63,6 +64,11 @@ license = files("floe_web").joinpath("icons", "LICENSE").read_text()
 assert "ISC License" in license and "The MIT License (MIT)" in license
 page = render.document("Workflows", render.inventory([]), "/")
 assert b"No installed workflows" in page and b"lucide-refresh-cw" in page
+assert b"floe-mark" in page and b'href="/favicon.svg"' in page
+brand = ElementTree.fromstring(render.brand_link())
+assert brand[0].get("aria-hidden") == "true" and brand[0].tail == "Floe"
+favicon = ElementTree.fromstring(render.favicon())
+assert len([node for node in favicon if node.tag.endswith("}path")]) == 2
 '''], cwd=tmp_path, capture_output=True, text=True, timeout=10,
     )
     assert rendered.returncode == 0, rendered.stdout + rendered.stderr

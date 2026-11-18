@@ -4,9 +4,12 @@ import http.client
 import json
 import threading
 import time
+from base64 import b64encode
 from datetime import datetime, timedelta, timezone
+from hashlib import sha256
 from html.parser import HTMLParser
 from unittest.mock import create_autospec
+from xml.etree import ElementTree
 
 import pytest
 from journal_fakes import FakeJournal, Run
@@ -253,7 +256,8 @@ def test_empty_and_uninstalled_workflows(app):
     ("/missing", 404), ("/workflows/../", 404), ("/workflows/%2Fetc%2Fpasswd", 404),
     ("/workflows/%FF", 400), ("/workflows/%3Cscript%3E", 400),
     ("/workflows/mydag/runs/not-a-run", 404), ("/?action=start", 404),
-    ("http://foreign/", 404),
+    ("http://foreign/", 404), ("/logo.svg", 404), ("/icons/check.svg", 404),
+    ("/favicon.svg?asset=anything", 404),
 ])
 def test_invalid_routes(app, path, code):
     assert app.response(path).status == code
@@ -313,6 +317,27 @@ def test_http_transport_headers_stylesheet_and_host_check(http_server):
     assert request(http_server, headers={"Host": "attacker.example"})[0] == 403
     assert request(http_server, "POST")[0] == 501
     assert request(http_server, path="/etc/passwd")[0] == 404
+
+
+def test_favicon_is_read_only_and_only_its_exact_inline_style_is_allowed(http_server, app):
+    code, headers, body = request(http_server, path="/favicon.svg")
+    assert code == 200 and headers["Content-Type"] == "image/svg+xml"
+    assert int(headers["Content-Length"]) == len(body) and headers["Cache-Control"] == "no-store"
+    assert headers["X-Content-Type-Options"] == "nosniff"
+    root = ElementTree.fromstring(body)
+    [style] = [node for node in root if node.tag.endswith("}style")]
+    digest = b64encode(sha256(style.text.encode()).digest()).decode("ascii")
+    policy = headers["Content-Security-Policy"]
+    assert {directive.strip() for directive in policy.split(";")} == {
+        "default-src 'none'", f"style-src 'sha256-{digest}'", "frame-ancestors 'none'",
+        "base-uri 'none'", "form-action 'none'"}
+    assert request(http_server, path="/favicon.svg", headers={"Host": "attacker.example"})[0] == 403
+    code, page_headers, _ = request(http_server, path="/missing")
+    assert code == 404
+    page_policy = page_headers["Content-Security-Policy"]
+    assert "style-src 'self'" in page_policy and "img-src 'self'" in page_policy
+    assert "unsafe-inline" not in policy + page_policy and "sha256-" not in page_policy
+    assert not app.sd.mock_calls and not app.journal.calls
 
 
 def test_server_ctrl_c_closes_socket_and_prints_only_to_stderr(app, monkeypatch, capsys):
