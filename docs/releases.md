@@ -133,8 +133,8 @@ Network/query errors are failures, not evidence that a release is absent.
 Download into a new directory and check both distributions before installation:
 
 ```bash
-mkdir floe-v0.2.0 && cd floe-v0.2.0
-gh release download v0.2.0 --repo ipdelete/floe \
+mkdir floe-v0.1.0 && cd floe-v0.1.0
+gh release download v0.1.0 --repo ipdelete/floe \
   --pattern '*.whl' --pattern '*.tar.gz' --pattern SHA256SUMS
 sha256sum --check SHA256SUMS
 uv tool install --python 3.14 ./floe-*.whl
