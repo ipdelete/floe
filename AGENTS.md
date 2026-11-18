@@ -102,18 +102,22 @@ it when the choice is made. Reconcile decisions and stale references at session
 end; label reconstructed rationale or unknowns honestly. Small routine changes
 need no decision log or separate implementation report.
 
-This method guides engineering within the PR workflow; it does not replace CI/CD
-or relax Floe's safety rules. See [Engineering knowledge](docs/engineering/README.md).
+See [Engineering knowledge](docs/engineering/README.md) for spike branches and
+evidence handoff. Merge-bound work follows the PR workflow below; disposable
+experiments use validation appropriate to the question. Safety rules apply to both.
 
 ## Development and pull-request workflow
 
 1. Start from an up-to-date `master` (`git pull --ff-only`), preserving any
-   existing local work. Create a focused `fix/...`, `feature/...`, or `docs/...`
-   branch before making changes; never push changes directly to `master`.
-2. Choose spike, design, or implementation as appropriate. Keep each PR coherent:
-   a spike may preserve findings without shipping its prototype; consequential
-   designs need human approval before implementation. Add appropriate tests and
-   documentation, and run the relevant [local validation](#testing-and-validation).
+   existing local work. Create a focused `fix/...`, `feature/...`, `docs/...`, or
+   `spike/...` branch before making changes; never push changes directly to `master`.
+2. Choose the appropriate path:
+   - **Disposable spike:** follow the
+     [spike branch workflow](docs/engineering/README.md#spike-branches-and-handoff)
+     and stop this checklist here; a PR is optional and not intended for merge.
+   - **Merge-bound work:** keep the PR coherent; consequential designs need human
+     approval before implementation. Add appropriate tests and documentation, run
+     the relevant [local validation](#testing-and-validation), then continue below.
 3. Commit and push the branch, then open a PR against `master`. Describe the
    change, relevant evidence and decisions, validation results, skipped checks,
    and unresolved questions or risks. PR-Agent and CI do not substitute for

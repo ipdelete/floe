@@ -1,9 +1,10 @@
 # Engineering Knowledge
 
-Floe uses **Spike → Design → Implement** as complementary methods inside its
-[PR workflow](../../AGENTS.md#development-and-pull-request-workflow), not mandatory
-stages or a replacement for CI/CD. Choose the cheapest useful action that can
-change a decision; small, understood changes can proceed straight to implementation.
+Floe uses **Spike**, **Design**, and **Implement** as complementary methods, not
+mandatory stages. Choose the cheapest useful action that can change a decision;
+small, understood changes can proceed straight to implementation. Disposable
+spikes follow the branch workflow below. Work intended for `master` follows the
+[PR workflow](../../AGENTS.md#development-and-pull-request-workflow).
 
 ## Using the skills
 
@@ -20,7 +21,39 @@ The skills and templates are development instructions, not Floe runtime
 requirements. Installation adds no executable hooks, extensions, global settings,
 or Python/Node package dependencies. It does not run experiments or authorize
 real-systemd operations. All [repository safety rules](../../AGENTS.md#non-negotiable-safety-rules)
-and review/merge requirements still apply.
+apply to experiments too; review/merge requirements apply to merge-bound work.
+
+## Spike branches and handoff
+
+A spike delivers evidence for a decision, not an implementation to merge.
+
+1. Start a `spike/<question-or-approach>` branch from updated `master`. Investigate
+   competing approaches on independent branches with a recorded baseline, rather
+   than making one experiment depend on another's prototype. Existing experimental
+   branches need not be renamed to preserve their findings.
+2. Define the question and a useful stopping criterion; use a timebox when helpful.
+   Validate the setup and run controls before interpreting results. Run checks
+   appropriate to the experiment; full production validation and PR-Agent review
+   are not automatic spike-completion requirements. All safety rules remain in force.
+3. Commit/push experimental code and notes when useful for sharing or preserving
+   evidence. A branch is sufficient: a PR is optional. If opened for discussion,
+   mark the spike PR **not intended for merge** and close it without deleting the
+   branch when discussion is done. Passing CI does not make a prototype merge-bound.
+4. Synthesize related findings into the effort's evidence/design record. Preserve
+   observations, failed approaches, setup/versions, reproduction details, baseline
+   and experiment commit references, limitations, and untested assumptions—not
+   necessarily the experimental code. Useful findings may be merged through a
+   separate documentation/design PR without merging the spike branches. Keep spike
+   branches available until useful evidence is captured and a maintainer explicitly
+   authorizes their deletion.
+5. Seek maintainer approval for consequential design choices, then implement on a
+   fresh branch from updated `master` against that intent. Prototype code is
+   throwaway by default; any deliberately reused code must independently meet
+   production contracts, tests, and review requirements.
+
+The handoff can recommend further investigation or stopping instead of design or
+implementation. This workflow does not require every change to pass through all
+three methods or require a design to justify a predetermined implementation.
 
 ## Artifacts and decisions
 
@@ -43,7 +76,9 @@ Installed from [ipdelete/agentic-engineering-method](https://github.com/ipdelete
 at commit `28897512f5d49f69eb3b9961daba0dfd7f924944`:
 
 - `.agents/skills/{spike,design,implement}/SKILL.md` — upstream skills with an
-  added clarification for resolving repository-root-relative artifact paths.
+  added clarification for resolving repository-root-relative artifact paths;
+  the spike skill also links Floe's branch/handoff workflow and allows a stopping
+  criterion instead of a mandatory timebox.
 - `.agents/templates/{spike,design,decisions}.md` — unchanged upstream starters.
 - This README and the engineering-method section of `AGENTS.md` are adapted to
   Floe; the existing architecture, safety, testing, and PR instructions are retained.
