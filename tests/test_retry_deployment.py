@@ -11,6 +11,17 @@ import floe
 from floe.render import exec_line
 
 
+def test_planning_does_not_inherit_shell_python_configuration(tmp_path, monkeypatch):
+    monkeypatch.setenv("PYTHONHOME", str(tmp_path / "not-a-python-home"))
+    monkeypatch.setenv("PYTHONUSERBASE", str(tmp_path / "shell-only-user-packages"))
+    monkeypatch.setenv("PYTHONPATH", str(tmp_path / "shell-only-imports"))
+    dep = floe.Deployment("demo", tmp_path / "flow.py", ("hourly",))
+    store = floe.UnitStore(tmp_path / "units")
+    plan = floe.plan_install(dep, store)
+    assert len(plan.writes) == 2
+    assert not store.path.exists()
+
+
 def test_interpreter_symlink_is_preserved_in_command_and_metadata(tmp_path, monkeypatch):
     python = tmp_path / "env 100% $money" / "bin" / "python"
     python.parent.mkdir(parents=True)

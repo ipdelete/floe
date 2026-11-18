@@ -90,7 +90,9 @@ working directory. `TimeoutStartSec=30min` bounds the entire workflow, including
 retry attempts and waits, and `KillMode=control-group` stops its child processes.
 The library's explicit `Deployment(python=...)` override must also provide Python
 3.14+, Floe and Tenacity. Planning validates imports in that environment with a
-bounded subprocess, without executing the workflow there or contacting systemd.
+bounded subprocess and a minimal PATH/PYTHONPATH environment, without inheriting
+shell Python overrides, executing the workflow there, or contacting systemd.
+This is an import preflight, not a reconstruction of every user-manager variable.
 
 The interpreter appears as `Python=` in service `[X-Floe]` metadata and in the
 dry-run command. No shell activation, package installation, `uv` invocation, or

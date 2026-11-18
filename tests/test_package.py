@@ -1,3 +1,4 @@
+import os
 import subprocess
 import sys
 import tomllib
@@ -29,6 +30,8 @@ def test_wheel_installs_with_icons_and_console_entry_point_outside_checkout(tmp_
         assert archive.read("floe_web/logo.svg") == (ROOT / "src/floe_web/logo.svg").read_bytes()
         for path in expected.iterdir():
             assert archive.read(f"floe_web/icons/{path.name}") == path.read_bytes()
+        metadata = archive.read(next(name for name in archive.namelist() if name.endswith(".dist-info/METADATA"))).decode()
+        assert "Requires-Dist: tenacity>=9.1.4,<10" in metadata
 
     environment = tmp_path / "venv"
     created = subprocess.run(
@@ -37,15 +40,23 @@ def test_wheel_installs_with_icons_and_console_entry_point_outside_checkout(tmp_
     )
     assert created.returncode == 0, created.stdout + created.stderr
     python = environment / "bin" / "python"
+    # Locked sync can reuse cached registry artifacts without index metadata.
+    # Install only runtime dependencies here; the project itself must come from
+    # the wheel, never from an editable checkout.
+    dependencies = subprocess.run(
+        ["uv", "sync", "--project", str(ROOT), "--offline", "--locked", "--no-dev", "--no-install-project"],
+        env={**os.environ, "UV_PROJECT_ENVIRONMENT": str(environment)},
+        cwd=tmp_path, capture_output=True, text=True, timeout=30,
+    )
+    assert dependencies.returncode == 0, dependencies.stdout + dependencies.stderr
     installed = subprocess.run(
-        ["uv", "pip", "install", "--offline", "--python", str(python), str(wheel)],
+        ["uv", "pip", "install", "--offline", "--no-deps", "--python", str(python), str(wheel)],
         cwd=tmp_path, capture_output=True, text=True, timeout=30,
     )
     assert installed.returncode == 0, installed.stdout + installed.stderr
     rendered = subprocess.run(
         [str(python), "-I", "-c", r'''
 import sys
-import os
 import json
 import shlex
 import subprocess

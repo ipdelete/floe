@@ -280,6 +280,17 @@ def test_active_wait_and_attempt_states_then_interruption(cut, waiting):
     assert ended.tasks[0].attempts[-1].status == ("failed" if waiting else "incomplete")
 
 
+def test_truncated_wait_without_attempt_records_is_visible():
+    logs = history(retry_records().records[:6], running=True, max_records=1)
+    task, = logs.run.tasks
+    assert logs.run.truncated and task.started is None
+    assert task.attempts == () and task.max_attempts == 3
+    assert task.retry_at is not None
+    assert "waiting to retry" in _detail(logs.run)
+    assert "Waiting to retry" in render.run_detail(logs)
+    assert "Attempt history" not in render.run_detail(logs)
+
+
 def test_truncated_history_does_not_invent_attempts_or_starts():
     logs = history(retry_records().records, max_records=4)
     task, = logs.run.tasks

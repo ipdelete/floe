@@ -115,7 +115,8 @@ jobs:
       - name: Check built wheel outside checkout
         run: |
           uv venv --python 3.14 "$RUNNER_TEMP/installed"
-          uv pip install --offline --python "$RUNNER_TEMP/installed/bin/python" dist/*.whl
+          UV_PROJECT_ENVIRONMENT="$RUNNER_TEMP/installed" uv sync --offline --locked --no-dev --no-install-project
+          uv pip install --offline --no-deps --python "$RUNNER_TEMP/installed/bin/python" dist/*.whl
           cd "$RUNNER_TEMP"
           installed/bin/floe --help
           installed/bin/python -I -c 'import floe; from floe_web import render; from floe_web.assets import ICON_NAMES; [render.icon(name) for name in ICON_NAMES]; render.favicon(); render.document("Workflows", render.inventory([]), "/")'

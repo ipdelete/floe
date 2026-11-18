@@ -25,10 +25,12 @@ Validation: deterministic waits, failure/cancellation/callback isolation, old/ne
 
 ## Validation evidence
 
-- Normal suite: 581 passed; 15 opt-in real-systemd cases skipped, including two new retry lifecycle cases.
+- Normal suite: 583 passed; 15 opt-in real-systemd cases skipped, including two new retry lifecycle cases.
 - Deployment demo and whitespace checks passed; built a wheel through the source distribution.
 - Packaging regression installs the wheel and cached Tenacity into a clean environment outside the checkout, runs its console entry point and exact generated service command with a retrying workflow, and verifies units offline.
 - Responsive browser fixtures: success, waiting, and interrupted views at 320/390/768/1440px; attempt disclosures work and no page-level overflow. Inspected mobile success and desktop waiting renders. Mechanical design detector reported no findings.
-- Disposable mutation probes detected an off-by-one attempt limit, ignored fixed delay, and lost attempt-output attribution. No mutations were retained.
+- Disposable mutation probes detected an off-by-one attempt limit, ignored fixed delay, lost attempt-output attribution, and removal of Tenacity's exhaustion callback. No mutations were retained.
+- Initial hosted CI exposed an offline-cache assumption: locked sync caches registry artifacts without necessarily fetching registry metadata. A direct wheel-URL fallback also failed in a fresh cache because uv keys direct-URL and registry artifacts separately. Packaging now uses offline locked runtime-only sync into the clean environment, then installs the project wheel without resolving dependencies again; wheel metadata explicitly asserts the Tenacity requirement. Retested with a separate fresh cache/environment.
+- PR-Agent's initial review produced findings with schema-validation warnings. Its valid shell-environment concern was fixed with minimal PATH/PYTHONPATH validation and a regression. The interpreter mismatch warning is intentional drift reporting, documented rather than an assertion that another environment is unusable. Empty/truncated retry waits have an explicit regression. Tenacity's exhaustion callback is required by the iterator (confirmed by mutation); cancellation/interrupt restoration and old/new schema behavior are covered.
 
 Uncertainty: actual systemd lifecycle behavior remains unverified without separately approved real-session tests. Browser validation used synthetic journal fixtures, not the user's session.

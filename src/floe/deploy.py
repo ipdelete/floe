@@ -146,7 +146,7 @@ def _validate_python(dep: Deployment) -> None:
             'importlib.util.find_spec("floe_cli") is not None or sys.exit("floe_cli is missing")')
     try:
         result = subprocess.run([dep.python, "-B", "-c", code], capture_output=True, text=True,
-                                env={**os.environ, "PYTHONPATH": str(dep.pythonpath)}, cwd="/", timeout=15)
+                                env={"PATH": os.defpath, "PYTHONPATH": str(dep.pythonpath)}, cwd="/", timeout=15)
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise ValidationError([f"cannot validate Python environment {dep.python}: {exc}"]) from exc
     if result.returncode:
