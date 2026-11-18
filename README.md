@@ -10,7 +10,7 @@ execution.
 
 - Linux with systemd and a user systemd session
 - Python 3.14 or newer; deployed services also require `/usr/bin/python3` to be 3.14 or newer
-- `systemctl`, `journalctl`, and `systemd-analyze` (for deployment calendar validation)
+- `systemctl`, `journalctl`, and `systemd-analyze` (for deployment calendar/timeout validation)
 - [uv](https://docs.astral.sh/uv/) to install the `floe` command
 
 ```bash

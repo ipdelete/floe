@@ -11,6 +11,7 @@ from unittest.mock import call, create_autospec
 import pytest
 from journal_fakes import FakeJournal, Run
 
+import floe
 from floe.store import UnitStore
 from floe.systemd import Systemd, SystemdError
 from floe_cli.main import main
@@ -393,6 +394,55 @@ def test_definition_import_output_does_not_corrupt_json(flow, sd, capsys, comman
     else:
         assert json.loads(out)
     assert "helper initialized" in err
+
+
+@pytest.mark.parametrize("command", ["run", "runs", "logs", "list"])
+@pytest.mark.parametrize("fail", [False, True])
+def test_import_descriptor_output_is_stderr_and_stdout_is_restored(tmp_path, command, fail):
+    flow = tmp_path / "flow.py"
+    flow.write_text('import helper\nWORKFLOW="mydag"\nSCHEDULE=["hourly"]\ntasks={}\ndag={}\n')
+    (tmp_path / "helper.py").write_text(
+        'import os, subprocess\nprint("python import output")\n'
+        'subprocess.run(["/bin/echo", "child import output"], check=True)\n'
+        'os.write(1, b"raw import output\\n")\n'
+        + ('raise RuntimeError("import failed")\n' if fail else ''))
+    # Write metadata without executing the noisy definition or calling a manager.
+    store = UnitStore(tmp_path / "units")
+    for unit, text in floe.Deployment("mydag", flow, ("hourly",)).render_units().items():
+        store.write(unit, text)
+    args = (["list", "--check", "--json"] if command == "list" else
+            [command, str(flow), *([] if command == "run" else ["--json"])])
+    code = '''import os, sys
+from unittest.mock import create_autospec
+from journal_fakes import FakeJournal, Run
+from floe import Systemd, UnitStore
+from floe_cli.main import main
+sd = create_autospec(Systemd, instance=True)
+sd.show.return_value = {"ActiveState": "inactive"}
+sd.show_all.return_value = [("ActiveState", "active"), ("UnitFileState", "enabled")]
+result = main(sys.argv[2:], store=UnitStore(sys.argv[1]), sd=sd,
+              journal=FakeJournal(Run("a" * 32).succeeded_run().records))
+sys.stdout.flush()
+os.write(1, b"restored stdout\\n")
+sys.exit(result)
+'''
+    result = subprocess.run([sys.executable, "-c", code, str(store.path), *args],
+                            capture_output=True, text=True, timeout=10,
+                            env={**os.environ, "PYTHONPATH": os.pathsep.join(
+                                (str(ROOT / "src"), str(ROOT / "tests")))})
+    assert result.returncode == int(fail), result.stderr
+    assert result.stdout.endswith("restored stdout\n")
+    output = result.stdout.removesuffix("restored stdout\n")
+    for message in ("python import output", "child import output", "raw import output"):
+        assert message in result.stderr and message not in output
+    if fail and command != "list":
+        assert output == ""
+    elif command == "run":
+        assert [json.loads(line)["event"] for line in output.splitlines()] == ["run_started", "run_completed"]
+    else:
+        assert json.loads(output)
+    if fail:
+        assert "import failed" in (output if command == "list" else result.stderr)
 
 
 @pytest.mark.parametrize("dry_run", [False, True])

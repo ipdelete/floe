@@ -48,6 +48,40 @@ def test_failure_stops_dependents_and_independent_tasks():
     assert events[2].error == events[3].error == "broken input"
 
 
+@pytest.mark.parametrize("kind", ["coroutine", "awaitable", "async_generator"])
+def test_async_results_fail_without_running_later_tasks(kind):
+    calls = []
+
+    async def work():
+        calls.append("awaited")
+
+    class Awaitable:
+        def __await__(self):
+            calls.append("awaited")
+            yield
+
+    async def async_generator():
+        calls.append("iterated")
+        yield None
+
+    result = {"coroutine": work, "awaitable": Awaitable, "async_generator": async_generator}[kind]()
+    workflow = Workflow("test", {"first": lambda: result, "later": lambda: calls.append("later")},
+                        {"first": set(), "later": {"first"}})
+    events, on_event = collect()
+    try:
+        assert run(workflow, on_event) is False
+        assert calls == []
+        assert [(event.event, event.status) for event in events[-2:]] == [
+            ("task_completed", "failed"), ("run_completed", "failed")]
+        assert "tasks must be synchronous" in events[-1].error
+        assert ("an async generator" if kind == "async_generator" else "an awaitable") in events[-1].error
+        if kind == "coroutine":
+            assert result.cr_frame is None, "rejected coroutine was not closed"
+    finally:
+        if kind == "coroutine":
+            result.close()
+
+
 def test_run_ids(monkeypatch):
     workflow = Workflow("test", {}, {})
     monkeypatch.delenv("INVOCATION_ID", raising=False)

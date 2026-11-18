@@ -129,7 +129,7 @@ def _add_target(parser: argparse.ArgumentParser, help_text: str) -> None:
 
 def _load(path: Path | str) -> floe.Workflow:
     # Definition and import side effects must not corrupt JSON or event stdout.
-    with redirect_stdout(sys.stderr):
+    with _stdout_on_stderr():
         return floe.load(path)
 
 
@@ -165,7 +165,7 @@ def _definition(target: str, ctx, *, name: bool = False) -> Path:
 
 def _run(args, ctx) -> int:
     workflow = _load(_definition(args.target, ctx, name=args.name))
-    with _events_only_on_stdout() as events:
+    with _stdout_on_stderr() as events:
 
         def emit(event: floe.Event) -> None:
             # Output a task already wrote belongs before the event that follows it.
@@ -178,12 +178,12 @@ def _run(args, ctx) -> int:
 
 
 @contextmanager
-def _events_only_on_stdout() -> Iterator:
-    """Yield a stream for events; send everything tasks write to stdout to stderr.
+def _stdout_on_stderr() -> Iterator:
+    """Route workflow output to stderr, yielding the original stdout for events.
 
-    Covers Python writes (sys.stdout) and child processes (file descriptor 1),
-    so task output can neither corrupt the event stream nor sit in a stdout
-    buffer until after its task has completed. Both are restored afterwards.
+    Covers definition/import code as well as tasks, including child processes
+    and raw descriptor writes. Flush before switching and restore both Python
+    streams and descriptor 1 even when loading or execution raises.
     """
     sys.stdout.flush()
     sys.stderr.flush()
@@ -255,7 +255,7 @@ def _status(args, ctx) -> int:
 
 
 def _list(args, ctx) -> int:
-    with redirect_stdout(sys.stderr):
+    with _stdout_on_stderr():
         summaries = floe.overview(ctx.store, ctx.sd, ctx.journal, verify=args.check)
     if args.json:
         print(json.dumps([summary.to_dict() for summary in summaries], indent=2))

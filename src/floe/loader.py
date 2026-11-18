@@ -13,7 +13,7 @@ from importlib.machinery import all_suffixes
 from pathlib import Path
 from types import ModuleType
 
-from .model import LoadError, Workflow
+from .model import LoadError, ValidationError, Workflow, _is_async_task
 
 __all__ = ["load"]
 
@@ -66,6 +66,10 @@ class _WorkflowImports:
             sys.path[:] = previous_path
 
     def wrap(self, task: Callable[..., object]) -> Callable[..., object]:
+        # Leave unsupported async callables visible to definition validation.
+        if _is_async_task(task):
+            return task
+
         @wraps(task)
         def invoke(*args, **kwargs):
             with self.active():
@@ -87,19 +91,22 @@ def load(path: str | Path) -> Workflow:
     try:
         with imports.active():
             namespace = runpy.run_path(str(path), run_name="floe_workflow")
+            missing = [key for key in ("WORKFLOW", "tasks", "dag") if key not in namespace]
+            if missing:
+                raise LoadError(f"{path}: missing {', '.join(missing)}")
+            tasks = namespace["tasks"]
+            if isinstance(tasks, Mapping):
+                # Leave invalid values intact so Workflow can aggregate their errors.
+                tasks = {name: imports.wrap(task) if callable(task) else task for name, task in tasks.items()}
+            # Lazy mappings/prerequisites/schedules execute definition code too.
+            return Workflow(
+                name=namespace["WORKFLOW"],
+                tasks=tasks,
+                dag=namespace["dag"],
+                schedule=namespace.get("SCHEDULE", ()),
+                source=path,
+            )
+    except (LoadError, ValidationError):
+        raise
     except Exception as exc:
         raise LoadError(f"{path}: {type(exc).__name__}: {exc}") from exc
-    missing = [key for key in ("WORKFLOW", "tasks", "dag") if key not in namespace]
-    if missing:
-        raise LoadError(f"{path}: missing {', '.join(missing)}")
-    tasks = namespace["tasks"]
-    if isinstance(tasks, Mapping):
-        # Leave invalid values intact so Workflow can aggregate their errors.
-        tasks = {name: imports.wrap(task) if callable(task) else task for name, task in tasks.items()}
-    return Workflow(
-        name=namespace["WORKFLOW"],
-        tasks=tasks,
-        dag=namespace["dag"],
-        schedule=namespace.get("SCHEDULE", ()),
-        source=path,
-    )

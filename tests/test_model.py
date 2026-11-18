@@ -1,5 +1,7 @@
 import json
 from dataclasses import replace
+from functools import partial
+from inspect import markcoroutinefunction
 from datetime import UTC, datetime
 from types import MappingProxyType
 
@@ -59,6 +61,32 @@ def test_invalid_graphs(tasks, dag, expected):
         Workflow("demo", tasks, dag)
     for text in expected:
         assert any(text in problem for problem in caught.value.problems), caught.value.problems
+
+
+@pytest.mark.parametrize("kind", ["function", "marked", "partial", "callable", "async_generator"])
+def test_async_tasks_are_rejected_alongside_other_definition_errors(kind):
+    async def work():
+        pass
+
+    class AsyncCallable:
+        async def __call__(self):
+            pass
+
+    async def async_generator():
+        yield None
+
+    @markcoroutinefunction
+    def marked():
+        return work()
+
+    task = {"function": work, "marked": marked, "partial": partial(work),
+            "callable": AsyncCallable(), "async_generator": async_generator}[kind]
+    with pytest.raises(ValidationError) as caught:
+        Workflow("demo", {"async": task, "invalid": None}, {"async": set(), "invalid": {"missing"}})
+    problems = "; ".join(caught.value.problems)
+    assert "task 'async' must be synchronous" in problems
+    assert "task 'invalid' is not callable" in problems
+    assert "unknown prerequisites: 'missing'" in problems
 
 
 def test_bad_prerequisites_do_not_hide_other_validation_errors():

@@ -45,7 +45,8 @@ def app(tmp_path):
         ("TimersCalendar", "{ OnCalendar=hourly ; next_elapse=@1800000000 }"),
         ("NextElapseUSecRealtime", "@1800000000"),
     ]
-    records = Run("a" * 32).succeeded_run().records
+    records = [*Run("a" * 32).succeeded_run().records,
+               *Run("b" * 32, workflow="other.py").succeeded_run(tasks=("other-task",)).records]
     return Application(store, sd, FakeJournal(records))
 
 
@@ -84,11 +85,11 @@ def test_three_pages_and_links_are_read_only_metadata(app, monkeypatch):
     assert "/workflows/other.py" in Links(home).links
     workflow = html(app.response("/workflows/other.py"))
     assert "Recent runs" in workflow and "hourly" in workflow
-    run_path = "/workflows/other.py/runs/" + "a" * 32
+    run_path = "/workflows/other.py/runs/" + "b" * 32
     assert run_path in Links(workflow).links
     detail = html(app.response(run_path))
-    assert "Tasks" in detail and "doing fetch" in detail and "doing transform" in detail
-    assert "Succeeded · other.py · aaaaaaaa · Floe</title>" in detail
+    assert "Tasks" in detail and "doing other-task" in detail and "doing fetch" not in detail
+    assert "Succeeded · other.py · bbbbbbbb · Floe</title>" in detail
     assert "other.py · Floe</title>" in workflow
     assert "script" not in Links(detail).tags and "form" not in Links(detail).tags
     assert all(call[0] in ("show", "show_all") for call in app.sd.mock_calls)
@@ -184,14 +185,14 @@ def test_malformed_backend_data_is_not_reported_as_a_bad_request(app):
 
 
 def test_transient_detail_error_retries_same_route_and_can_recover(app):
-    path = "/workflows/other.py/runs/" + "a" * 32
+    path = "/workflows/other.py/runs/" + "b" * 32
     app.sd.show.side_effect = floe.SystemdError(["systemctl"], 1, "temporarily unavailable")
     response = app.response(path)
     source = response.body.decode()
     assert response.status == 503
     assert Links(source).links.count(path) == 2  # Refresh and Try again.
     assert "floe status --name other.py" in source
-    assert "floe logs --name other.py " + "a" * 32 in source
+    assert "floe logs --name other.py " + "b" * 32 in source
     assert "No workflow state was changed" in source
     app.sd.show.side_effect = None
     assert app.response(path).status == 200  # Error responses must not get stuck in the page cache.
@@ -244,7 +245,7 @@ def test_empty_and_uninstalled_workflows(app):
     assert "No recent runs" in empty_workflow and 'floe status --name mydag' in empty_workflow
     assert '30 days ago' in empty_workflow and 'Direct <code>floe run</code>' in empty_workflow
     assert app.response("/workflows/missing").status == 404
-    app.journal = FakeJournal(Run("a" * 32).succeeded_run().records)
+    app.journal = FakeJournal(Run("a" * 32, workflow="deleted").succeeded_run().records)
     assert "no longer installed" in html(app.response("/workflows/deleted"))
     empty = Application(floe.UnitStore(app.store.path / "absent"), app.sd, FakeJournal([]))
     empty_home = html(empty.response("/"))

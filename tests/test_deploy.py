@@ -93,6 +93,32 @@ def test_invalid_calendars_never_create_or_replace_units(dep, tmp_path, sd, alre
     assert sd.mock_calls == []
 
 
+@pytest.mark.parametrize("already_installed", [False, True])
+@pytest.mark.parametrize("timeout", ["not-a-duration", "-1s", "30min nonsense"])
+def test_invalid_timeouts_never_create_or_replace_units(dep, tmp_path, sd, already_installed, timeout):
+    store = UnitStore(tmp_path / "units")
+    if already_installed:
+        install(dep, store, sd)
+    before = {name: ((store.path / name).read_bytes(), (store.path / name).stat().st_mtime_ns)
+              for name in store.units()}
+    sd.reset_mock()
+    invalid = Deployment(dep.workflow, dep.script, dep.schedule, timeout=timeout)
+    with pytest.raises(ValidationError, match="invalid timeout"):
+        install(invalid, store, sd)
+    assert {name: ((store.path / name).read_bytes(), (store.path / name).stat().st_mtime_ns)
+            for name in store.units()} == before
+    assert sd.mock_calls == []
+
+
+@pytest.mark.parametrize("timeout", ["5min", "1h 30min", "0", "infinity"])
+def test_timeout_overrides_are_validated_without_rejecting_special_values(dep, tmp_path, timeout):
+    deployment = Deployment(dep.workflow, dep.script, dep.schedule, timeout=timeout)
+    store = UnitStore(tmp_path / "units")
+    plan = plan_install(deployment, store)
+    assert f"TimeoutStartSec={timeout}\n" in plan.changes[0].text
+    assert not store.path.exists()
+
+
 def test_plan_describes_changes_without_writing(dep, tmp_path, sd):
     store = UnitStore(tmp_path / "units")
     plan = plan_install(dep, store)

@@ -232,6 +232,38 @@ def test_malformed_events_are_output_not_history_state(sd, fields):
     assert json.loads(json.dumps(logs.to_dict()))["run"]["duration"] is not None
 
 
+@pytest.mark.parametrize("parent_status", ["running", "incomplete", "failed"])
+def test_child_workflow_events_do_not_change_parent_history(sd, parent_status):
+    parent = Run("a" * 32).starting().event("run_started").event("task_started", task="parent-task")
+    started = json.loads(parent.records[1]["MESSAGE"])["timestamp"]
+    child_start = len(parent.records)
+    parent.event("run_started", workflow="child", timestamp="2000-01-01T00:00:00+00:00")
+    parent.event("task_started", workflow="child", task="child-task")
+    parent.event("task_completed", workflow="child", task="child-task", status="succeeded")
+    parent.event("run_completed", workflow="child", status="succeeded")
+    child_end = len(parent.records)
+    if parent_status == "running":
+        sd.show.return_value = {"ActiveState": "activating", "InvocationID": parent.id}
+    elif parent_status == "failed":
+        parent.event("task_completed", task="parent-task", status="failed", error="parent failed")
+        parent.event("run_completed", status="failed", error="parent failed").failed()
+
+    logs = run_logs("mydag", parent.id, FakeJournal(parent.records), sd)
+    assert logs.run.status == parent_status
+    assert logs.run.started.isoformat() == started
+    assert [(task.name, task.status) for task in logs.run.tasks] == [("parent-task", parent_status)]
+    child_lines = logs.lines[child_start:child_end]
+    assert len(child_lines) == 4
+    assert all(line.kind == "output" and line.task == "parent-task" and line.event is None
+               for line in child_lines)
+
+    # A child's timestamp must not reorder its parent's invocation in discovery.
+    older = Run("b" * 32, int(parent.records[0]["__REALTIME_TIMESTAMP"]) - 1_000_000).succeeded_run()
+    journal = FakeJournal([*older.records, *parent.records])
+    assert list_runs("mydag", journal, sd, limit=1)[0].run_id == parent.id
+    assert get_run("mydag", None, journal, sd).run_id == parent.id
+
+
 def test_records_without_invocation_are_ignored(sd):
     journal = journal_of("e" * 32)
     journal.records_list.insert(0, {**MANAGER, "__REALTIME_TIMESTAMP": "1", "MESSAGE": "unrelated"})

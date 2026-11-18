@@ -35,9 +35,13 @@ dag = {
 directly and required for installing. Modules next to the file are importable,
 including from inside tasks. Each load keeps its own sibling-module cache, so
 separate workflows can use the same helper-module names without sharing code
-or state.
+or state. Lazy schedule and prerequisite iterators are consumed under the same
+sibling-import isolation as the definition itself.
 
 Every task must appear in the DAG, including tasks with no prerequisites.
+Tasks must be synchronous callables: async functions are rejected during loading,
+and a synchronous callable that returns an awaitable fails its task rather than
+being reported successful. Floe does not await or schedule async work.
 Task names must be nonempty strings. Workflow names must be 1–247 ASCII
 characters, start with a letter or digit, and contain only letters, digits,
 `_`, `.` or `-`; they are also the systemd unit names. Floe validates the whole
@@ -52,9 +56,12 @@ Tasks run one at a time. An exception stops the workflow, records failure, and
 returns a nonzero exit code. Tasks following the failure are not executed,
 including independent tasks later in the execution order.
 
-stdout carries only Floe's events. While tasks run, `floe run` sends anything
-they write to stdout to stderr instead, whether from `print()` or from child
-processes, and flushes Python's output before each event so that output stays
+stdout carries only Floe's events. Definition/import output is routed to stderr
+at the CLI boundary, including subprocess and raw file-descriptor writes. This
+also keeps `floe list --check --json` parseable when checking noisy definitions.
+During task execution, `floe run` sends task stdout to stderr, whether from
+`print()` or child processes, and flushes Python's output before each event so
+that output stays
 with the task that wrote it. End output lines with a newline: under systemd,
 stdout and stderr share one journal stream, so an unterminated line is joined
 to the next event, which history then cannot recognize.

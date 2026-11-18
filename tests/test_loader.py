@@ -119,6 +119,73 @@ def test_failed_workflow_restores_import_state(tmp_path, fail_at):
     assert module_name not in sys.modules
 
 
+@pytest.mark.parametrize("kind", ["schedule", "prerequisites"])
+@pytest.mark.parametrize("ambient", [False, True])
+@pytest.mark.parametrize("fail", [False, True])
+def test_lazy_definitions_use_isolated_sibling_imports(tmp_path, monkeypatch, kind, ambient, fail):
+    module_name = "floe_lazy_helper"
+    existing = ModuleType(module_name)
+    existing.value = "ambient"
+    if ambient:
+        monkeypatch.setitem(sys.modules, module_name, existing)
+    value = "hourly" if kind == "schedule" else "b"
+    (tmp_path / f"{module_name}.py").write_text(f"value = {value!r}\nconsumed = 0\n")
+    path = tmp_path / "flow.py"
+    source = (
+        'WORKFLOW = "demo"\n'
+        'def step():\n'
+        f'    import {module_name} as helper\n'
+        '    return helper.value, helper.consumed\n'
+        'tasks = {"a": step, "b": lambda: None}\n'
+        'dag = {"a": set(), "b": set()}\n'
+        'def values():\n'
+        f'    import {module_name} as helper\n'
+        '    helper.consumed += 1\n'
+        '    yield helper.value\n'
+    )
+    if fail:
+        source += '    raise RuntimeError("iteration failed")\n'
+    source += 'SCHEDULE = values()\n' if kind == "schedule" else 'dag["a"] = values()\n'
+    path.write_text(source)
+    original_path = list(sys.path)
+    if fail:
+        with pytest.raises(LoadError, match="RuntimeError: iteration failed"):
+            load(path)
+    else:
+        workflow = load(path)
+        if kind == "schedule":
+            assert workflow.schedule == ("hourly",)
+        else:
+            assert workflow.dag["a"] == frozenset({"b"})
+            assert workflow.order == ("b", "a")
+        assert workflow.tasks["a"]() == (value, 1)
+    assert sys.path == original_path
+    if ambient:
+        assert sys.modules[module_name] is existing
+    else:
+        assert module_name not in sys.modules
+
+
+def test_sync_adapter_with_async_wrapped_metadata_is_allowed(tmp_path):
+    path = tmp_path / "flow.py"
+    path.write_text('import asyncio\nfrom functools import wraps\nWORKFLOW = "demo"\n'
+                    'async def work():\n    return "done"\n'
+                    '@wraps(work)\ndef step():\n    return asyncio.run(work())\n'
+                    'tasks = {"a": step}\ndag = {"a": set()}\n')
+    workflow = load(path)
+    assert workflow.tasks["a"]() == "done"
+
+
+def test_loaded_async_tasks_are_rejected_before_wrapping(tmp_path):
+    path = tmp_path / "flow.py"
+    path.write_text('WORKFLOW = "demo"\nasync def step():\n    pass\n'
+                    'tasks = {"a": step, "b": None}\ndag = {"a": set(), "b": set()}\n')
+    with pytest.raises(ValidationError) as caught:
+        load(path)
+    assert any("task 'a' must be synchronous" in problem for problem in caught.value.problems)
+    assert any("task 'b' is not callable" in problem for problem in caught.value.problems)
+
+
 def test_invalid_definition_raises_validation_error(tmp_path):
     path = tmp_path / "flow.py"
     path.write_text(VALID.replace('{"a": set()}', '{"a": {"b"}}'))

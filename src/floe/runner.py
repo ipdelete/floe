@@ -5,12 +5,13 @@ the caller's `on_event` callback; serializing them (e.g. JSON lines for
 journald) is the UI's job.
 """
 
+import inspect
 import os
 import uuid
 from collections.abc import Callable
 from datetime import UTC, datetime
 
-from .model import Event, Workflow
+from .model import Event, ValidationError, Workflow
 
 __all__ = ["default_run_id", "run"]
 
@@ -52,7 +53,12 @@ def _run(workflow: Workflow, on_event: Callable[[Event], object], run_id: str) -
     for name in workflow.order:
         emit("task_started", task=name)
         try:
-            workflow.tasks[name]()
+            result = workflow.tasks[name]()
+            if inspect.isawaitable(result) or inspect.isasyncgen(result):
+                if inspect.iscoroutine(result):
+                    result.close()
+                kind = "an async generator" if inspect.isasyncgen(result) else "an awaitable"
+                raise ValidationError([f"task {name!r} returned {kind}; tasks must be synchronous"])
         except Exception as exc:
             emit("task_completed", task=name, status="failed", error=str(exc))
             emit("run_completed", status="failed", error=str(exc))

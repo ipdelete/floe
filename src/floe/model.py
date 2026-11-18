@@ -6,6 +6,7 @@ JSON-ready form for machine interfaces.
 """
 
 import difflib
+import inspect
 import re
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
@@ -168,6 +169,13 @@ class Workflow:
         }
 
 
+def _is_async_task(task: object) -> bool:
+    for candidate in (task, getattr(task, "__call__", None)):
+        if inspect.iscoroutinefunction(candidate) or inspect.isasyncgenfunction(candidate):
+            return True
+    return False
+
+
 def _graph_problems(tasks: dict, dag: dict[str, frozenset[str]]) -> list[str]:
     problems = []
     for name, task in tasks.items():
@@ -175,6 +183,8 @@ def _graph_problems(tasks: dict, dag: dict[str, frozenset[str]]) -> list[str]:
             problems.append(f"task names must be nonempty strings: {name!r}")
         elif not callable(task):
             problems.append(f"task {name!r} is not callable")
+        elif _is_async_task(task):
+            problems.append(f"task {name!r} must be synchronous, not async")
     missing = sorted(map(repr, tasks.keys() - dag.keys()))
     extra = sorted(map(repr, dag.keys() - tasks.keys()))
     if missing:

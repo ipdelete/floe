@@ -80,7 +80,7 @@ def run_logs(workflow: str, run_id: str | None, journal: Journal, sd: Systemd, *
     run = _build_run(workflow, invocation, records, invocation == _active_invocation(service, sd),
                      max_records=max_records)
     lines = records[-max_records:] if max_records is not None else records
-    return RunLogs(run, tuple(_log_lines(invocation, lines)))
+    return RunLogs(run, tuple(_log_lines(workflow, invocation, lines)))
 
 
 def _check_record_limit(value: int | None) -> None:
@@ -111,6 +111,7 @@ def _find(service: str, run_id: str | None, journal: Journal, *,
 def _run_ids(service: str, journal: Journal, *, since: str | None = None,
              prefix: str | None = None) -> list[str]:
     """Index start times, not record adjacency or the last output a run wrote."""
+    workflow = service.removesuffix(".service")
     first: dict[str, datetime] = {}
     started: dict[str, datetime] = {}
     for record in journal.records(service, since=since, reverse=True):
@@ -119,7 +120,7 @@ def _run_ids(service: str, journal: Journal, *, since: str | None = None,
             continue
         when = _time(record)
         first[invocation] = min(first.get(invocation, when), when)
-        event = _event(record, invocation)
+        event = _event(record, workflow, invocation)
         if event is not None and event.event == "run_started":
             when = _event_time(event)
             started[invocation] = min(started.get(invocation, when), when)
@@ -175,7 +176,7 @@ def _time(record: dict) -> datetime:
     return datetime(1970, 1, 1, tzinfo=UTC) + timedelta(microseconds=int(record["__REALTIME_TIMESTAMP"]))
 
 
-def _event(record: dict, invocation: str) -> Event | None:
+def _event(record: dict, workflow: str, invocation: str) -> Event | None:
     message = _message(record)
     if _from_systemd(record) or not message.startswith("{"):
         return None
@@ -183,8 +184,9 @@ def _event(record: dict, invocation: str) -> Event | None:
         event = Event.from_dict(json.loads(message))
     except ValueError:
         return None
-    # Only events this invocation emitted about itself count.
-    return event if event is not None and event.run_id == invocation else None
+    # Child workflows can inherit the invocation ID and journal stream.
+    return event if (event is not None and event.workflow == workflow
+                     and event.run_id == invocation) else None
 
 
 def _event_time(event: Event) -> datetime:
@@ -214,7 +216,7 @@ def _build_run(workflow: str, invocation: str, records: list[dict], running: boo
                     or record.get("UNIT_RESULT") not in (None, "", "success")):
                 failed = True
             continue
-        event = _event(record, invocation)
+        event = _event(record, workflow, invocation)
         if event is None:
             output.append(_message(record))
             continue
@@ -262,7 +264,7 @@ def _error_output(output: list[str], result: str | None) -> str | None:
     return f"systemd result: {result}" if result else None
 
 
-def _log_lines(invocation: str, records: Iterable[dict]) -> Iterator[LogLine]:
+def _log_lines(workflow: str, invocation: str, records: Iterable[dict]) -> Iterator[LogLine]:
     task = None
     for record in records:
         when, message = _time(record), _message(record)
@@ -270,7 +272,7 @@ def _log_lines(invocation: str, records: Iterable[dict]) -> Iterator[LogLine]:
         if _from_systemd(record):
             yield LogLine(when, "systemd", message, priority=priority)
             continue
-        event = _event(record, invocation)
+        event = _event(record, workflow, invocation)
         if event is None:
             yield LogLine(when, "output", message, task=task, priority=priority)
             continue

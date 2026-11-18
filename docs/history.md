@@ -24,8 +24,11 @@ records for the selected invocations; delayed records from an older run do not
 truncate a newer run. `--since` selects runs with journal activity in that range,
 but their displayed history also includes records from before the cutoff.
 
-Only schema-valid events with timezone-aware timestamps are used to reconstruct
-runs. Other JSON, including malformed event-shaped output, remains ordinary output.
+Only schema-valid events with timezone-aware timestamps and matching workflow
+and invocation identities are used to reconstruct runs. Other JSON, including
+malformed event-shaped output, remains ordinary output. If a task invokes a
+different workflow with `floe run`, that child's events remain output of the
+parent task, even when the child inherits the same systemd invocation ID.
 
 A run's ID is its systemd invocation ID. Its status is:
 

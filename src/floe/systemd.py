@@ -29,6 +29,18 @@ def validate_calendars(schedule: tuple[str, ...]) -> None:
         raise ValidationError(problems)
 
 
+def validate_timeout(timeout: str) -> None:
+    """Reject timeouts systemd would ignore, without contacting the manager."""
+    command = ["systemd-analyze", "timespan", "--", timeout]
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise ValidationError([f"cannot validate timeout with systemd-analyze: {exc}"]) from exc
+    if result.returncode:
+        detail = result.stderr.strip() or result.stdout.strip()
+        raise ValidationError([f"invalid timeout {timeout!r}: {detail}"])
+
+
 class Systemd:
     def __init__(self, user: bool = True):
         self.base = ["systemctl", "--user"] if user else ["systemctl"]

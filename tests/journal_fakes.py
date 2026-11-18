@@ -26,8 +26,9 @@ class FakeJournal:
         self.calls.append((unit, since, reverse, invocations))
         self.limits.append(limit)
         records = [record for record in self.records_list
-                   if invocations is None or
-                   (record.get("_SYSTEMD_INVOCATION_ID") or record.get("USER_INVOCATION_ID")) in invocations]
+                   if (record.get("_SYSTEMD_USER_UNIT") or record.get("USER_UNIT")) in (None, unit)
+                   and (invocations is None or
+                        (record.get("_SYSTEMD_INVOCATION_ID") or record.get("USER_INVOCATION_ID")) in invocations)]
         if limit is not None:
             records = records[-limit:]
         for record in (records[::-1] if reverse else records):
@@ -38,8 +39,9 @@ class FakeJournal:
 class Run:
     """Builds the journal records of one invocation."""
 
-    def __init__(self, invocation, start_us=1_800_000_000_000_000):
+    def __init__(self, invocation, start_us=1_800_000_000_000_000, *, workflow="mydag"):
         self.id = invocation
+        self.workflow = workflow
         self.us = start_us
         self.records = []
 
@@ -49,16 +51,18 @@ class Run:
         return self
 
     def systemd(self, message, **fields):
-        return self._add({**MANAGER, "USER_INVOCATION_ID": self.id, "MESSAGE": message, **fields})
+        return self._add({**MANAGER, "USER_UNIT": f"{self.workflow}.service",
+                          "USER_INVOCATION_ID": self.id, "MESSAGE": message, **fields})
 
     def output(self, message):
-        return self._add({"_TRANSPORT": "stdout", "SYSLOG_IDENTIFIER": "mydag", "PRIORITY": "6",
+        return self._add({"_TRANSPORT": "stdout", "SYSLOG_IDENTIFIER": self.workflow, "PRIORITY": "6",
+                          "_SYSTEMD_USER_UNIT": f"{self.workflow}.service",
                           "_SYSTEMD_INVOCATION_ID": self.id, "MESSAGE": message})
 
     def event(self, event, run_id=None, **fields):
         seconds = self.us / 1e6 + 0.0005
         timestamp = datetime.fromtimestamp(seconds, UTC).isoformat()
-        return self.output(json.dumps({"schema": 1, "event": event, "workflow": "mydag",
+        return self.output(json.dumps({"schema": 1, "event": event, "workflow": self.workflow,
                                        "run_id": run_id or self.id, "timestamp": timestamp, **fields}))
 
     def starting(self):

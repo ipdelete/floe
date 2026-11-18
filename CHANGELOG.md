@@ -5,6 +5,19 @@ moves into a dated version section when preparing a release PR.
 
 ## [Unreleased]
 
+### Fixed
+
+- Match lifecycle events to both workflow and invocation identity, so a different
+  child workflow cannot prematurely complete its parent's recorded run.
+- Validate deployment timeout overrides with systemd's parser before writing
+  units, including dry runs; invalid values no longer silently disable the bound.
+- Keep definition/import subprocess and raw-descriptor output on stderr, including
+  during `list --check --json`, and restore stdout after loading errors.
+- Reject async task definitions and fail tasks that return awaitables instead of
+  reporting success without executing their work. Async execution is not added.
+- Consume lazy definition iterators within sibling-import isolation, preserving
+  the workflow's helper cache and restoring ambient state after failures.
+
 ## [0.1.0] - 2026-11-18
 
 Initial release.

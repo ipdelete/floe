@@ -4,7 +4,7 @@ from unittest.mock import Mock, call
 import pytest
 
 from floe.model import ValidationError
-from floe.systemd import Systemd, SystemdError, validate_calendars
+from floe.systemd import Systemd, SystemdError, validate_calendars, validate_timeout
 
 
 def test_calendars_use_systemd_parser_without_a_service_manager(monkeypatch):
@@ -24,6 +24,30 @@ def test_calendar_validation_tool_failure_is_actionable(monkeypatch, error):
     monkeypatch.setattr("floe.systemd.subprocess.run", Mock(side_effect=error))
     with pytest.raises(ValidationError, match="cannot validate schedule with systemd-analyze"):
         validate_calendars(("hourly",))
+
+
+@pytest.mark.parametrize("timeout", ["30min", "1h 30min", "0", "infinity"])
+def test_timeout_uses_systemd_parser_without_a_service_manager(monkeypatch, timeout):
+    run = Mock(return_value=subprocess.CompletedProcess([], 0, "", ""))
+    monkeypatch.setattr("floe.systemd.subprocess.run", run)
+    validate_timeout(timeout)
+    run.assert_called_once_with(["systemd-analyze", "timespan", "--", timeout],
+                                capture_output=True, text=True, timeout=10)
+
+
+def test_invalid_timeout_preserves_parser_diagnostics(monkeypatch):
+    monkeypatch.setattr("floe.systemd.subprocess.run", Mock(
+        return_value=subprocess.CompletedProcess([], 1, "", "Failed to parse time span")))
+    with pytest.raises(ValidationError, match="invalid timeout 'bad': Failed to parse time span"):
+        validate_timeout("bad")
+
+
+@pytest.mark.parametrize("error", [FileNotFoundError("missing analyzer"),
+                                   subprocess.TimeoutExpired("systemd-analyze", 10)])
+def test_timeout_validation_tool_failure_is_actionable(monkeypatch, error):
+    monkeypatch.setattr("floe.systemd.subprocess.run", Mock(side_effect=error))
+    with pytest.raises(ValidationError, match="cannot validate timeout with systemd-analyze"):
+        validate_timeout("30min")
 
 
 @pytest.mark.parametrize("method,args,kwargs,command", [

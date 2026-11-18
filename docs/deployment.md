@@ -60,7 +60,11 @@ idempotent: when nothing changed it writes nothing and skips `daemon-reload`.
 It refuses to overwrite unit files it did not write; use `install --adopt` to
 take over existing units of the same name. Masked units, symlinks, and
 directories are never overwritten, even with `--adopt`. Both unit files are
-planned and checked before either is written. Each replacement is atomic, but
+planned and checked before either is written. Planning uses `systemd-analyze`
+to validate both calendars and the service timeout; invalid timeout overrides
+are rejected rather than installed as a directive systemd would ignore. The
+library's `Deployment(timeout=...)` accepts systemd durations, including `0` and
+`infinity` to disable the start timeout. Each replacement is atomic, but
 the pair is not a transaction: an unexpected I/O or systemd failure can still
 require rerunning `install`.
 

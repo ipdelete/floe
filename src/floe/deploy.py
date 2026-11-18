@@ -24,7 +24,7 @@ from .model import (
 )
 from .render import render_service, render_timer
 from .store import UnitStore
-from .systemd import Systemd, validate_calendars
+from .systemd import Systemd, validate_calendars, validate_timeout
 
 __all__ = [
     "Deployment", "apply", "install", "plan_install", "start", "status", "uninstall",
@@ -107,8 +107,9 @@ class Deployment:
 
 
 def plan_install(dep: Deployment, store: UnitStore, *, adopt: bool = False) -> InstallPlan:
-    """Validate calendars and describe changes, without writing or calling systemctl."""
+    """Validate calendars/timeout and plan changes, without writes or systemctl."""
     units = dep.render_units()
+    validate_timeout(dep.timeout)
     validate_calendars(dep.schedule)
     changes = []
     for name, text in units.items():
