@@ -75,15 +75,49 @@ feature.
 - Keep refactors focused and behavior-preserving unless a contract change is
   intentional and documented. Measure realistic workloads before optimizing.
 
+## Engineering method
+
+Use **Spike**, **Design**, and **Implement** as complementary methods, not
+mandatory sequential stages. Choose the cheapest useful next action based on
+what is known, remaining uncertainty, risk, and the cost of being wrong:
+
+- **Spike:** answer a bounded question through focused experiments. Confirm the
+  setup and versions, use controls where useful, and distinguish observations
+  from inferences. Prototype code is disposable by default; retain reproducible,
+  decision-relevant findings, including failed approaches and limitations.
+- **Design:** turn evidence into explicit alternatives, trade-offs, constraints,
+  invariants, and a validation plan. Ask for human judgment on consequential
+  architectural choices; an agent recommendation is not an approved decision.
+- **Implement:** build the smallest coherent change against the engineering
+  intent. Validate it and revisit spike/design when new evidence changes an
+  assumption. Routine, understood changes can proceed directly to implementation.
+
+Skills are in `.agents/skills/`; optional starters are in `.agents/templates/`.
+Keep durable artifacts proportional to the effort under
+`docs/engineering/<effort>/`, with an entry point and links when several documents
+are needed. Keep current conclusions clear and significant history explicit.
+For consequential choices, maintain an effort-local `decisions.md`: record the
+choice, alternatives, rationale, evidence, uncertainty, status, and who approved
+it when the choice is made. Reconcile decisions and stale references at session
+end; label reconstructed rationale or unknowns honestly. Small routine changes
+need no decision log or separate implementation report.
+
+This method guides engineering within the PR workflow; it does not replace CI/CD
+or relax Floe's safety rules. See [Engineering knowledge](docs/engineering/README.md).
+
 ## Development and pull-request workflow
 
 1. Start from an up-to-date `master` (`git pull --ff-only`), preserving any
    existing local work. Create a focused `fix/...`, `feature/...`, or `docs/...`
    branch before making changes; never push changes directly to `master`.
-2. Implement the change, add appropriate regression tests, update documentation,
-   and run the relevant local validation below.
+2. Choose spike, design, or implementation as appropriate. Keep each PR coherent:
+   a spike may preserve findings without shipping its prototype; consequential
+   designs need human approval before implementation. Add appropriate tests and
+   documentation, and run the relevant [local validation](#testing-and-validation).
 3. Commit and push the branch, then open a PR against `master`. Describe the
-   change, validation results, skipped checks, and any remaining risks.
+   change, relevant evidence and decisions, validation results, skipped checks,
+   and unresolved questions or risks. PR-Agent and CI do not substitute for
+   human approval of consequential architectural choices.
 4. Run PR-Agent on the PR. Verify each finding against the implementation and
    supported contracts; fix valid issues and explain why others do not apply.
    If review cannot run, report the blocker rather than claiming it completed.

@@ -21,6 +21,20 @@ dependencies into a temporary virtual environment outside the checkout. It
 checks the console entry point, isolated imports, and bundled icon geometry and
 license resources. It does not contact a package registry or service manager.
 
+## Engineering methods
+
+Use the repository's [Spike, Design, and Implement skills](engineering/README.md)
+to investigate uncertainty, make evidence-based decisions, and build against the
+resulting intent. They are complementary methods, not required stages for every
+change. Keep useful findings and consequential decisions under
+`docs/engineering/<effort>/`; prototypes are disposable by default.
+
+The [PR workflow](../AGENTS.md#development-and-pull-request-workflow) is unchanged:
+focused branch and PR, PR-Agent review, valid findings addressed, CI passing on
+the latest commit, then authorized squash merge and safe branch cleanup. Skills
+and passing CI never authorize real-systemd tests or replace human architectural
+approval.
+
 ## Continuous integration
 
 [CI](../.github/workflows/ci.yml) runs on PRs and pushes to `master`. It uses
