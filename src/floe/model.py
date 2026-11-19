@@ -119,7 +119,9 @@ def _normalize_dag(dag: object) -> tuple[dict[str, frozenset[str]] | None, list[
     return normalized, problems
 
 
-def _normalize_inputs(inputs, tasks, dag, problems):
+def _normalize_inputs(inputs: object, tasks: dict | None, dag: dict[str, frozenset[str]] | None,
+                      problems: list[str]) -> dict[str, Mapping[str, str]]:
+    """Snapshot bindings and add their edges to the private normalized DAG."""
     if not isinstance(inputs, Mapping):
         problems.append("inputs must be a mapping of consumers to keyword bindings")
         return {}

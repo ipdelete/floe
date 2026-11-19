@@ -86,7 +86,8 @@ dag = {"A": set(), "B": set(), "C": set()}
 inputs = {"C": {"prices": "A", "quantities": "B"}}
 ```
 
-Each binding adds a prerequisite; don't repeat it in `dag`. An ordinary DAG
+`inputs` is now a reserved definition-file global; rename any unrelated helper
+variable with that name before upgrading. Each binding adds a prerequisite; don't repeat it in `dag`. An ordinary DAG
 edge waits without passing a value. A bound consumer must accept the named
 keyword arguments. Tasks still run **sequentially**. Only a successful producer
 supplies its value; a failed prerequisite prevents the whole call, not just

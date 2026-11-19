@@ -47,12 +47,13 @@ def test_bound_values_are_snapshots_per_attempt_and_consumer():
     def c(v):
         seen.append(v['items'].copy())
 
+    order_only = {'C': {'B'}, 'B': set(), 'A': set()}
     w = floe.Workflow('test', {'A': lambda: original, 'B': b, 'C': c},
-                      {'C': {'B'}, 'B': set(), 'A': set()}, inputs=bindings,
+                      order_only, inputs=bindings,
                       retries={'B': floe.RetryPolicy(2, 0, (TimeoutError,))})
     bindings['C']['v'] = 'B'
     assert w.to_dict()['inputs']['C'] == {'v': 'A'}
-    assert w.dag['C'] == {'A', 'B'}
+    assert w.dag['C'] == {'A', 'B'} and order_only['C'] == {'B'} and order_only['B'] == set()
     assert floe.run(w, lambda e: None)
     assert seen == [[None], [None], [None]] and original == {'items': [None]}
 
@@ -82,6 +83,24 @@ def test_null_is_present_and_unconsumed_return_is_ignored():
     w = floe.Workflow('test', {'A': lambda: None, 'B': lambda x: seen.append(x) or Path('ignored')},
                       {'A': set(), 'B': set()}, inputs={'B': {'x': 'A'}})
     assert floe.run(w, lambda e: None) and seen == [None]
+
+
+def test_retention_failure_reported_on_producer_not_consumer(monkeypatch):
+    monkeypatch.setattr(results, 'MAX_RETAINED_BYTES', 5)
+    calls = []
+    events = []
+    w = floe.Workflow('test', {'A': lambda: 'a', 'B': lambda: 'b', 'C': lambda **kw: calls.append(kw)},
+                      {'A': set(), 'B': {'A'}, 'C': set()}, inputs={'C': {'a': 'A', 'b': 'B'}})
+    assert not floe.run(w, events.append) and not calls
+    assert (events[-2].task, events[-2].status, events[-1].status) == ('B', 'failed', 'failed')
+    assert 'retained byte limit' in events[-2].error
+
+
+def test_loader_rejects_nonmapping_inputs(tmp_path):
+    f = tmp_path / 'bad.py'
+    f.write_text("WORKFLOW='test'\ntasks={'A': lambda: 1}\ndag={'A': set()}\ninputs=[]\n")
+    with pytest.raises(floe.ValidationError, match='inputs must be a mapping'):
+        floe.load(f)
 
 
 def test_limits_apply_to_encoded_size_and_release_last_use(monkeypatch):
