@@ -169,7 +169,21 @@ def test_failed_cleanup_reports_owned_path_and_does_not_remove(tmp_path, kernel,
     kernel.linger = True
     with pytest.raises(floe.FloeError, match='cleanup unconfirmed') as err:
         asyncio.run(call(w, RunResults(w.inputs), lambda *_: None, drain=.04))
-    assert str(tmp_path) in str(err.value) and not kernel.removed
+    assert all(text in str(err.value) for text in (str(tmp_path), 'TimeoutError', 'denied'))
+    assert not kernel.removed
+
+
+def test_failed_final_removal_discards_success_even_when_cleanup_recovers(tmp_path, kernel, monkeypatch):
+    remove = kernel.remove_empty
+    def fail_once():
+        if not kernel.killed:
+            raise PermissionError('first removal failed')
+        remove()
+    monkeypatch.setattr(kernel, 'remove_empty', fail_once)
+    w = workflow(tmp_path)
+    with pytest.raises(PermissionError, match='first removal failed'):
+        asyncio.run(call(w, RunResults(w.inputs), lambda *_: None))
+    assert kernel.killed and kernel.removed
 
 
 @pytest.mark.parametrize('content', ['', 'populated', 'populated 2', 'populated 0\npopulated 1'])

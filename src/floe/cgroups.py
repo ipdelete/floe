@@ -116,13 +116,16 @@ async def managed_group(cleanup_timeout):
                 raise FloeError(f'new task group unexpectedly populated: {group.path}')
             # Missing/forbidden kill is a launch blocker, not a discovery at timeout.
             os.close(group.open_control('cgroup.kill', os.O_WRONLY))
-        except BaseException:
-            group.remove_empty()  # never kill unexpected occupants during setup
+        except BaseException as setup_error:
+            try:
+                group.remove_empty()  # never kill unexpected occupants during setup
+            except (OSError, FloeError) as exc:
+                raise FloeError(f'{setup_error!r}; setup cleanup unconfirmed for {group.path}: {exc!r}') from exc
             raise
         try:
             yield group
-            group.remove_empty()
-        except BaseException:
+            group.remove_empty()  # even a transient removal failure discards the result
+        except BaseException as original:
             try:
                 # Target only the pinned group; even an unknown population is not
                 # permission to claim success. Recheck after the kill request.
@@ -134,5 +137,5 @@ async def managed_group(cleanup_timeout):
                 exc.add_note(f'cleanup interrupted for owned task group {group.path}')
                 raise
             except (OSError, FloeError) as exc:
-                raise FloeError(f'cleanup unconfirmed for owned task group {group.path}: {exc}') from exc
+                raise FloeError(f'{original!r}; cleanup unconfirmed for owned task group {group.path}: {exc!r}') from exc
             raise
