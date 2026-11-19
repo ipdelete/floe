@@ -58,6 +58,12 @@ The rules, enforced by `tests/test_boundaries.py`:
 - Tenacity is the sole third-party runtime dependency, confined to the runner's
   retry mechanism. Floe owns policies, events, history, and deployment.
 
+`Workflow(..., inputs={"consume": {"value": "produce"}})` passes run-local
+return values by keyword. `workflow.inputs` snapshots both mapping levels;
+`workflow.dag` includes binding and order-only prerequisites. `to_dict()` includes
+`inputs` for workflows declaring bindings, not result payloads. See
+[passing results](workflows.md#pass-small-results-to-downstream-tasks).
+
 `RetryPolicy(max_attempts, delay_seconds, retry_on)` is exported alongside
 `Workflow(..., retries={task_name: policy})`. Definition files expose the same
 optional `retries` mapping. `Workflow` snapshots it and aggregates invalid policy

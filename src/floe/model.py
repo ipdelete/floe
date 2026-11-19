@@ -119,6 +119,37 @@ def _normalize_dag(dag: object) -> tuple[dict[str, frozenset[str]] | None, list[
     return normalized, problems
 
 
+def _normalize_inputs(inputs, tasks, dag, problems):
+    if not isinstance(inputs, Mapping):
+        problems.append("inputs must be a mapping of consumers to keyword bindings")
+        return {}
+    normalized = {}
+    for consumer, bindings in dict(inputs).items():
+        if tasks is not None and consumer not in tasks:
+            problems.append(f"inputs for unknown task {consumer!r}")
+        if not isinstance(bindings, Mapping):
+            problems.append(f"inputs for {consumer!r} must be a mapping")
+            continue
+        keywords = {}
+        for keyword, producer in dict(bindings).items():
+            if not isinstance(keyword, str) or not keyword:
+                problems.append(f"input key for {consumer!r} must be a nonempty string")
+                continue
+            if not isinstance(producer, str) or not producer or (tasks is not None and producer not in tasks):
+                problems.append(f"invalid input producer {producer!r} for {consumer!r}.{keyword}")
+                continue
+            keywords[keyword] = producer
+        if keywords and tasks is not None and callable(tasks.get(consumer)):
+            try:
+                inspect.signature(tasks[consumer]).bind(**keywords)
+            except (TypeError, ValueError) as exc:
+                problems.append(f"invalid input signature for {consumer!r}: {exc}")
+        if dag is not None and consumer in dag:
+            dag[consumer] = dag[consumer].union(keywords.values())
+        normalized[consumer] = MappingProxyType(keywords)
+    return normalized
+
+
 def _valid_delay(value: object) -> bool:
     if type(value) not in (int, float):
         return False
@@ -168,11 +199,12 @@ class Workflow:
     """
 
     name: str
-    tasks: Mapping[str, Callable[[], object]]
+    tasks: Mapping[str, Callable[..., object]]
     dag: Mapping[str, frozenset[str]]
     schedule: tuple[str, ...] = ()
     source: Path | None = None
     retries: Mapping[str, RetryPolicy] = field(default_factory=dict)
+    inputs: Mapping[str, Mapping[str, str]] = field(default_factory=dict)
     order: tuple[str, ...] = field(init=False)
 
     def __post_init__(self) -> None:
@@ -192,6 +224,7 @@ class Workflow:
                 problems.extend(f"retry policy for {name!r}: {problem}" for problem in policy.problems())
         if tasks is None:
             problems.append("tasks must be a mapping of names to callables")
+        inputs = _normalize_inputs(self.inputs, tasks, dag, problems)
         problems += dag_errors
         order: tuple[str, ...] = ()
         if tasks is not None and dag is not None:
@@ -204,6 +237,7 @@ class Workflow:
                     problems.append(f"dependency cycle: {' -> '.join(map(str, exc.args[1]))}")
         if problems:
             raise ValidationError(problems, subject="workflow")
+        object.__setattr__(self, "inputs", MappingProxyType(inputs))
         object.__setattr__(self, "retries", MappingProxyType(retries))
         object.__setattr__(self, "tasks", MappingProxyType(tasks))
         object.__setattr__(self, "dag", MappingProxyType(dag))
@@ -219,6 +253,7 @@ class Workflow:
             "order": list(self.order),
             "dag": {name: sorted(deps) for name, deps in self.dag.items()},
             "retries": {name: policy.to_dict() for name, policy in self.retries.items()},
+            **({"inputs": {name: dict(bindings) for name, bindings in self.inputs.items()}} if self.inputs else {}),
         }
 
 

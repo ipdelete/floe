@@ -7,6 +7,8 @@ moves into a dated version section when preparing a release PR.
 
 ### Added
 
+- Optional `inputs` bindings pass bounded JSON return values by keyword between
+  sequential tasks, with private copies per consumer and retry attempt.
 - Opt-in per-task `RetryPolicy` using Tenacity, with finite attempts, fixed delays,
   explicit retryable exceptions, preserved attempt history and output attribution,
   and CLI/dashboard retry states. Sequential execution remains unchanged.

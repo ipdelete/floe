@@ -66,6 +66,43 @@ with the task that wrote it. End output lines with a newline: under systemd,
 stdout and stderr share one journal stream, so an unterminated line is joined
 to the next event, which history then cannot recognize.
 
+## Pass small results to downstream tasks
+
+Set `inputs[consumer][keyword] = producer` to pass a producer's return value to a
+consumer. For example, in a definition with `WORKFLOW = "inventory"`:
+
+```python
+def prices():
+    return {"apple": 2}
+
+def quantities():
+    return {"apple": 3}
+
+def total(*, prices, quantities):
+    print(prices["apple"] * quantities["apple"])
+
+tasks = {"A": prices, "B": quantities, "C": total}
+dag = {"A": set(), "B": set(), "C": set()}
+inputs = {"C": {"prices": "A", "quantities": "B"}}
+```
+
+Each binding adds a prerequisite; don't repeat it in `dag`. An ordinary DAG
+edge waits without passing a value. A bound consumer must accept the named
+keyword arguments. Tasks still run **sequentially**. Only a successful producer
+supplies its value; a failed prerequisite prevents the whole call, not just
+one argument. `None` is a valid result, not a missing value. Printing is still
+logging. A synchronous return nobody binds is ignored as before.
+
+Bound results must be built-in JSON values: `None`, bool, int, finite float,
+str, list, or dict with string keys, with no cycles. Each argument is a private
+copy, including on each retry. Results live only in this run; Floe doesn't put
+them in events or history. Invalid results fail the producer and are not
+retryable task exceptions. Size limits: 1 MiB per result, 8 MiB total retained,
+measured as compact ASCII-escaped JSON, at most 64 levels below the root.
+Python's integer-to-string conversion limit applies. Floe releases a stored
+value after its last bound consumer. For larger data, return a path string to a
+file that your task writes and manages.
+
 ## Run directly
 
 ```bash
@@ -134,8 +171,7 @@ no external calls or real retry delay.
 
 Scheduled runs happen while nobody watches. These patterns keep them predictable:
 
-- **Pass data through files.** Tasks take no arguments and return nothing.
-  Write their results to files, for example in a `state/` directory next to the
+- **Pass large or durable data through files.** Write those results to files, for example in a `state/` directory next to the
   workflow file, and replace each file atomically (write a temporary file in the
   same directory, then `os.replace` it) so a crash never leaves half a file.
 - **The next run starts afresh.** After final failure, the next scheduled run starts
