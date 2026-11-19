@@ -33,8 +33,9 @@ inputs = {'C': {'value': 'A'}, 'D': {'value': 'B'}}
     return p
 
 
-@pytest.mark.parametrize('whole', [False, True])
-def test_control_reaches_supervisor_before_terminal_commit(tmp_path, monkeypatch, whole):
+@pytest.mark.parametrize('whole,after_cancel', [(True, 'cancelled'), (False, 'cancelled'),
+                                                (False, 'staged_success'), (False, 'cleanup_failed')])
+def test_control_reaches_supervisor_before_terminal_commit(tmp_path, monkeypatch, whole, after_cancel):
     @asynccontextmanager
     async def delegated(_):
         yield
@@ -53,6 +54,12 @@ def test_control_reaches_supervisor_before_terminal_commit(tmp_path, monkeypatch
                 output(task, b'partial\xe2')
                 try:
                     await unblock.wait()
+                except asyncio.CancelledError:
+                    if after_cancel == 'staged_success':
+                        return WorkerEvidence(task, 0, b'42', None)
+                    if after_cancel == 'cleanup_failed':
+                        raise floe.FloeError('cleanup unconfirmed')
+                    raise
                 finally:
                     output(task, b'\x98\x83')
             if task == 'B':
@@ -76,11 +83,12 @@ def test_control_reaches_supervisor_before_terminal_commit(tmp_path, monkeypatch
                 await asyncio.gather(run, return_exceptions=True)
 
     asyncio.run(it())
-    assert dict(seen) == ({'A': {}, 'B': {}} if whole else {'A': {}, 'B': {}, 'D': {'value': 27}})
+    failed = after_cancel == 'cleanup_failed'
+    assert dict(seen) == ({'A': {}, 'B': {}} if whole or failed else {'A': {}, 'B': {}, 'D': {'value': 27}})
     assert {e.task: e.status for e in events if e.event == 'task_completed'} == {
-        'A': 'cancelled', 'B': 'cancelled' if whole else 'succeeded',
-        'C': 'skipped', 'D': 'skipped' if whole else 'succeeded'}
-    assert events[-1].status == 'cancelled'
+        'A': 'failed' if failed else 'cancelled', 'B': 'cancelled' if whole else 'succeeded',
+        'C': 'skipped', 'D': 'skipped' if whole or failed else 'succeeded'}
+    assert events[-1].status == ('failed' if failed else 'cancelled')
     assert [e.message for e in events if e.event == 'task_output'] == ['partial☃']
     assert [floe.Event.from_dict(e.to_dict()) for e in events] == events
 

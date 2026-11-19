@@ -94,7 +94,6 @@ async def run_managed(workflow: Workflow, workers: int, on_event: Callable[[Even
     schedule = TaskSchedule(workflow, workers)
     results = RunResults(workflow.inputs)
     active = {}
-    cancelling = set()
     clients = set()
     skipped = set()
 
@@ -121,7 +120,6 @@ async def run_managed(workflow: Workflow, workers: int, on_event: Callable[[Even
                     await writer.drain()
                     return
                 for name in targets:
-                    cancelling.add(name)
                     active[name].cancel()
                 writer.write(b'accepted\n')
                 await writer.drain()
@@ -165,7 +163,7 @@ async def run_managed(workflow: Workflow, workers: int, on_event: Callable[[Even
                 try:
                     evidence = worker.result()
                     if evidence.error is None:
-                        if name not in cancelling:
+                        if not schedule.cancellation_requested(name):
                             results.commit_encoded(name, evidence.value)
                             status = 'succeeded'
                         else:
@@ -173,7 +171,7 @@ async def run_managed(workflow: Workflow, workers: int, on_event: Callable[[Even
                     else:
                         status, detail = 'failed', evidence.error
                 except asyncio.CancelledError:
-                    if name not in cancelling:
+                    if not schedule.cancellation_requested(name):
                         raise
                     status = 'cancelled'
                 except TimeoutError:
