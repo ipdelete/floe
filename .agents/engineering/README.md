@@ -75,6 +75,8 @@ For consequential choices, maintain an effort-local `decisions.md`. Capture deci
 
 ## Current efforts
 
+- [Agentic development loop](29-agentic-dev-loop/design.md): proposed design for #29; [decision log](29-agentic-dev-loop/decisions.md).
+
 - [Parallel tasks](parallel-tasks/design.md): proposed execution and cancellation model for #8; [evidence and approval status](parallel-tasks/decisions.md).
 
 - [Task retries](task-retries/decisions.md): approved policy/deployment direction,
