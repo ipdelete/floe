@@ -1,6 +1,6 @@
 # Decisions: agentic development loop
 
-[Feature #29][feature] · [Design #30][design] · [Accepted ADR](design.md). This log spans requirements, spikes, design and implementation. Only the requirements rows are recorded decisions. The proposals do not supersede them unless the maintainer approves the change and the design PR records it. Design PR: [#36](https://github.com/ipdelete/floe/pull/36). The maintainer approved it in the orchestrating session `01a1f52b-4f03-7480-9a47-e3525d5ed1bb` and instructed the agent to merge it; the merge SHA is recorded on #29 and #30.
+[Feature #29][feature] · [Design #30][design] · [Accepted ADR](design.md). This log spans requirements, spikes, design and implementation. Only the requirements rows are recorded decisions. The proposals do not supersede them unless the maintainer approves the change and the design PR records it. Design PR: [#36](https://github.com/ipdelete/floe/pull/36). The maintainer approved it in the orchestrating session `01a1f52b-4f03-7480-9a47-e3525d5ed1bb` and instructed the agent to merge it; the merge SHA is recorded on #29 and #30 when it merges.
 
 ## Requirements — transcribed from #29
 

@@ -27,7 +27,9 @@ feature.
   files. Generated E2E workflows use the `floe-e2e-` prefix.
 - Standing approval (#29, D-05, D-20): story PRs run the live E2E suite last,
   on the maintainer's machine, limited to generated `floe-e2e-*` units and one
-  run at a time. The agentic loop may install and validate its own units there.
+  run at a time. Until the E2E lock exists (D-15), first check that no other live
+  run is in progress (`systemctl --user list-units --all 'floe-e2e-*'` is empty);
+  if one is, wait. The agentic loop may install and validate its own units there.
   Anything else that changes the user's systemd session still needs approval.
 - Agents use the maintainer's `gh` login (#29, D-11). Never merge a design PR
   (one that changes an effort's `design.md` or `decisions.md`, closes a design

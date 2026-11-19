@@ -155,7 +155,7 @@ sequenceDiagram
 
 ## Approval and merge gates
 
-**Identity (D-11).** Agents act through the maintainer's `gh` login on the maintainer's repos. GitHub won't record an approving review from a PR's author, so a design is approved when the **maintainer merges its PR**; record the merge SHA in the decision log. The loop's merge step never merges a PR that touches the canonical ADR or decision log, closes a design issue, or is titled `Design:`; it leaves those for the maintainer.
+**Identity (D-11).** Agents act through the maintainer's `gh` login on the maintainer's repos. GitHub won't record an approving review from a PR's author, so a design is approved when the **maintainer merges its PR**; record the merge SHA in the decision log. The loop's merge step never merges a PR that touches the canonical ADR or decision log, closes a design issue, or is titled `Design:`; it leaves those for the maintainer. If the maintainer explicitly tells an agent to merge one specific design PR, that merge is the maintainer's action carried out on their instruction, not the loop's merge step (D-22).
 
 This is a convention enforced by the loop's own code, not by GitHub: an agent using the same login could bypass it. If unattended merging later needs GitHub to enforce the split, revisit with a separate identity (a GitHub App or bot account with `CODEOWNERS` and a no-bypass ruleset), validated in a throwaway repo first [#34][s34].
 
