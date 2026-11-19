@@ -25,6 +25,17 @@ feature.
 - Do not run real-systemd E2E tests or modify the user's systemd session without
   explicit approval. Never operate on unrelated units or clean up arbitrary
   files. Generated E2E workflows use the `floe-e2e-` prefix.
+- Standing approval (#29, D-05, D-20): story PRs run the live E2E suite last,
+  on the maintainer's machine, limited to generated `floe-e2e-*` units and one
+  run at a time. Until the E2E lock exists (D-15), first check that no other live
+  run is in progress (`systemctl --user list-units --all 'floe-e2e-*'` is empty);
+  if one is, wait. The agentic loop may install and validate its own units there.
+  Anything else that changes the user's systemd session still needs approval.
+- Agents use the maintainer's `gh` login (#29, D-11). Never merge a design PR
+  (one that changes an effort's `design.md` or `decisions.md`, closes a design
+  issue, or is titled `Design:`) unless the maintainer explicitly tells you to
+  merge that exact PR; the maintainer's merge is the design approval. Do not
+  change repository settings.
 - Workflow Python is trusted executable code, not sandboxed data. Execute it
   only where documented; metadata-only inspection must not load definitions.
 - Preserve sibling-import isolation during both loading and task execution.
@@ -104,6 +115,11 @@ it when the choice is made. Reconcile decisions and stale references at session
 end; label reconstructed rationale or unknowns honestly. Small routine changes
 need no decision log or separate implementation report.
 
+Feature work follows the [agentic dev loop](.agents/engineering/29-agentic-dev-loop/design.md):
+the feature issue is the index; spikes, the design, and stories are its
+sub-issues; the design PR is the only human approval; each story is test-driven
+with live E2E last; decisions go in the feature's `decisions.md`.
+
 See [Engineering knowledge](.agents/engineering/README.md) for spike branches and
 evidence handoff. Merge-bound work follows the PR workflow below; disposable
 experiments use validation appropriate to the question. Safety rules apply to both.
@@ -135,8 +151,9 @@ experiments use validation appropriate to the question. Safety rules apply to bo
    local branch only after confirming it contains no additional work. Squash
    merging may require `git branch -D`; do not use it as blanket cleanup.
 
-Real-systemd E2E validation remains separately opt-in and requires explicit
-approval; a PR or passing CI does not authorize modifying the user's session.
+Real-systemd E2E validation is opt-in. Outside the standing approval above, it
+requires explicit approval; a PR or passing CI does not authorize modifying the
+user's session.
 
 ## Testing and validation
 
@@ -159,8 +176,10 @@ git diff --check
 - For packaging or service-command changes, build a wheel and validate a clean
   installation outside the checkout, including the console entry point and
   exact generated interpreter command. Run offline unit verification where applicable.
-- With explicit approval, run the real-session suite separately:
-  `uv run pytest -q -m systemd_e2e --systemd-e2e`.
+- Run the real-session suite separately, last, and only under the standing
+  approval or explicit approval: `uv run pytest -q -m systemd_e2e --systemd-e2e`.
+  It removes every leftover `floe-e2e-*` unit when it starts, so never run two
+  at once.
 - Report what ran, what was skipped, and remaining validation gaps. Passing mocks
   or offline unit verification does not establish real-systemd lifecycle behavior.
 
