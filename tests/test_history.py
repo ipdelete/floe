@@ -311,6 +311,22 @@ def test_run_logs_lines_and_task_attribution(sd):
     assert logs.to_dict()["lines"][1]["event"]["event"] == "run_started"
 
 
+def test_parallel_output_uses_explicit_task_not_most_recent_start(sd):
+    r = Run('a' * 32).event('run_started', schema=3)
+    r.event('task_started', task='A', schema=3).event('task_started', task='B', schema=3)
+    r.event('task_output', task='A', message='from A', schema=3)
+    r.event('task_output', task='B', message='from B', schema=3)
+    r.event('task_completed', task='A', status='cancelled', schema=3)
+    r.event('task_completed', task='C', status='skipped', schema=3)
+    r.event('task_completed', task='B', status='succeeded', schema=3)
+    r.event('run_completed', status='cancelled', schema=3).failed()
+    log = run_logs('mydag', None, FakeJournal(r.records), sd)
+    assert log.run.status == 'cancelled'
+    assert {t.name: t.status for t in log.run.tasks} == {'A': 'cancelled', 'B': 'succeeded', 'C': 'skipped'}
+    assert [(line.task, line.message) for line in log.lines if line.kind == 'output'] == [
+        ('A', 'from A'), ('B', 'from B')]
+
+
 def test_log_line_times_follow_the_journal_order(sd):
     """Events carry their own timestamp, taken before the line reached journald.
     Displaying it next to journald receive times made times go backwards."""

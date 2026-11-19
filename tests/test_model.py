@@ -130,7 +130,7 @@ def test_event_schema_round_trip(kind, task, status):
 
 
 @pytest.mark.parametrize("changes", [
-    {"schema": True}, {"schema": 1.0}, {"schema": 3},
+    {"schema": True}, {"schema": 1.0}, {"schema": 4},
     {"event": "unknown"}, {"event": []},
     {"workflow": ""}, {"run_id": ""}, {"timestamp": ""},
     {"timestamp": "not a date"}, {"timestamp": "2026-01-01T00:00:00"},

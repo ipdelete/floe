@@ -7,9 +7,16 @@ moves into a dated version section when preparing a release PR.
 
 ### Added
 
+- Optional `inputs` bindings pass bounded JSON return values by keyword between
+  sequential tasks, with private copies per consumer and retry attempt.
 - Opt-in per-task `RetryPolicy` using Tenacity, with finite attempts, fixed delays,
   explicit retryable exceptions, preserved attempt history and output attribution,
   and CLI/dashboard retry states. Sequential execution remains unchanged.
+
+- `@parallel` and `floe install --workers N` enable bounded overlap for installed
+  workflows using delegated cgroup v2 task groups. `floe cancel` can stop one
+  task branch or the entire run. Sequential mode remains the default. Parallel
+  runs reject retry policies and use schema-3 events for task-attributed output.
 
 ### Changed
 

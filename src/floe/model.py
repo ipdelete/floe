@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from graphlib import CycleError, TopologicalSorter
 from pathlib import Path
-from types import MappingProxyType
+from types import FunctionType, MappingProxyType, MethodType
 from typing import Literal
 
 EVENT_SCHEMA = 2
@@ -119,6 +119,39 @@ def _normalize_dag(dag: object) -> tuple[dict[str, frozenset[str]] | None, list[
     return normalized, problems
 
 
+def _normalize_inputs(inputs: object, tasks: dict | None, dag: dict[str, frozenset[str]] | None,
+                      problems: list[str]) -> dict[str, Mapping[str, str]]:
+    """Snapshot bindings and add their edges to the private normalized DAG."""
+    if not isinstance(inputs, Mapping):
+        problems.append("inputs must be a mapping of consumers to keyword bindings")
+        return {}
+    normalized = {}
+    for consumer, bindings in dict(inputs).items():
+        if tasks is not None and consumer not in tasks:
+            problems.append(f"inputs for unknown task {consumer!r}")
+        if not isinstance(bindings, Mapping):
+            problems.append(f"inputs for {consumer!r} must be a mapping")
+            continue
+        keywords = {}
+        for keyword, producer in dict(bindings).items():
+            if not isinstance(keyword, str) or not keyword:
+                problems.append(f"input key for {consumer!r} must be a nonempty string")
+                continue
+            if not isinstance(producer, str) or not producer or (tasks is not None and producer not in tasks):
+                problems.append(f"invalid input producer {producer!r} for {consumer!r}.{keyword}")
+                continue
+            keywords[keyword] = producer
+        if keywords and tasks is not None and callable(tasks.get(consumer)):
+            try:
+                inspect.signature(tasks[consumer]).bind(**keywords)
+            except (TypeError, ValueError) as exc:
+                problems.append(f"invalid input signature for {consumer!r}: {exc}")
+        if dag is not None and consumer in dag:
+            dag[consumer] = dag[consumer].union(keywords.values())
+        normalized[consumer] = MappingProxyType(keywords)
+    return normalized
+
+
 def _valid_delay(value: object) -> bool:
     if type(value) not in (int, float):
         return False
@@ -129,6 +162,23 @@ def _valid_delay(value: object) -> bool:
 
 
 # --- Workflow ---------------------------------------------------------------
+
+_PARALLEL_MARK = object()
+
+
+def parallel[F](task: F) -> F:
+    """Mark a Python task function as eligible for overlap; never schedule or wrap it."""
+    if not isinstance(task, FunctionType):
+        raise ValidationError(["@parallel must decorate a Python function"])
+    task.__floe_parallel__ = _PARALLEL_MARK
+    return task
+
+
+def _parallel_eligible(task: Callable) -> bool:
+    if isinstance(task, MethodType):
+        task = task.__func__
+    return isinstance(task, FunctionType) and vars(task).get('__floe_parallel__') is _PARALLEL_MARK
+
 
 @dataclass(frozen=True)
 class RetryPolicy:
@@ -168,12 +218,14 @@ class Workflow:
     """
 
     name: str
-    tasks: Mapping[str, Callable[[], object]]
+    tasks: Mapping[str, Callable[..., object]]
     dag: Mapping[str, frozenset[str]]
     schedule: tuple[str, ...] = ()
     source: Path | None = None
     retries: Mapping[str, RetryPolicy] = field(default_factory=dict)
+    inputs: Mapping[str, Mapping[str, str]] = field(default_factory=dict)
     order: tuple[str, ...] = field(init=False)
+    parallel_tasks: frozenset[str] = field(init=False)
 
     def __post_init__(self) -> None:
         schedule, schedule_errors = normalize_schedule(self.schedule)
@@ -192,6 +244,7 @@ class Workflow:
                 problems.extend(f"retry policy for {name!r}: {problem}" for problem in policy.problems())
         if tasks is None:
             problems.append("tasks must be a mapping of names to callables")
+        inputs = _normalize_inputs(self.inputs, tasks, dag, problems)
         problems += dag_errors
         order: tuple[str, ...] = ()
         if tasks is not None and dag is not None:
@@ -204,21 +257,26 @@ class Workflow:
                     problems.append(f"dependency cycle: {' -> '.join(map(str, exc.args[1]))}")
         if problems:
             raise ValidationError(problems, subject="workflow")
+        object.__setattr__(self, "inputs", MappingProxyType(inputs))
         object.__setattr__(self, "retries", MappingProxyType(retries))
         object.__setattr__(self, "tasks", MappingProxyType(tasks))
         object.__setattr__(self, "dag", MappingProxyType(dag))
         object.__setattr__(self, "schedule", schedule)
         object.__setattr__(self, "source", None if self.source is None else Path(self.source))
         object.__setattr__(self, "order", order)
+        eligible = frozenset(name for name, task in tasks.items() if _parallel_eligible(task))
+        object.__setattr__(self, "parallel_tasks", eligible)
 
     def to_dict(self) -> dict:
         return {
             "name": self.name,
+            **({"parallel_tasks": sorted(self.parallel_tasks)} if self.parallel_tasks else {}),
             "schedule": list(self.schedule),
             "source": None if self.source is None else str(self.source),
             "order": list(self.order),
             "dag": {name: sorted(deps) for name, deps in self.dag.items()},
             "retries": {name: policy.to_dict() for name, policy in self.retries.items()},
+            **({"inputs": {name: dict(bindings) for name, bindings in self.inputs.items()}} if self.inputs else {}),
         }
 
 
@@ -255,8 +313,8 @@ def _graph_problems(tasks: dict, dag: dict[str, frozenset[str]]) -> list[str]:
 # --- Run events ---------------------------------------------------------------
 
 EventKind = Literal["run_started", "task_started", "task_completed", "run_completed",
-                    "attempt_started", "attempt_completed", "retry_scheduled"]
-Status = Literal["succeeded", "failed"]
+                    "attempt_started", "attempt_completed", "retry_scheduled", "task_output"]
+Status = Literal["succeeded", "failed", "cancelled", "skipped"]
 
 
 @dataclass(frozen=True)
@@ -276,14 +334,18 @@ class Event:
     delay_seconds: float | None = None
     failure_reason: Literal["exhausted", "non_retryable"] | None = None
 
+    message: str | None = None
+
     @classmethod
     def from_dict(cls, data: object) -> Event | None:
         """Parse a JSON event, or return None if it isn't one of this schema."""
-        if not isinstance(data, dict) or type(data.get("schema")) is not int or data["schema"] not in (1, 2):
+        if not isinstance(data, dict) or type(data.get("schema")) is not int or data["schema"] not in (1, 2, 3):
             return None
         kinds = ("run_started", "task_started", "task_completed", "run_completed")
         if data["schema"] == 2:
             kinds += ("attempt_started", "attempt_completed", "retry_scheduled")
+        elif data["schema"] == 3:
+            kinds += ("task_output",)
         if data.get("event") not in kinds:
             return None
         fields = {key: data.get(key) for key in ("workflow", "run_id", "timestamp", "task", "status", "error")}
@@ -315,8 +377,17 @@ class Event:
                 return None
         elif fields["task"] is not None:
             return None
+        message = data.get("message")
+        if kind == "task_output":
+            if not isinstance(message, str) or len(message) > 1024:
+                return None
+        elif message is not None:
+            return None
         if kind.endswith("_completed"):
-            if fields["status"] not in ("succeeded", "failed"):
+            statuses = ("succeeded", "failed")
+            if data["schema"] == 3:
+                statuses += ("cancelled",) if kind == "run_completed" else ("cancelled", "skipped")
+            if fields["status"] not in statuses:
                 return None
         elif fields["status"] is not None:
             return None
@@ -329,12 +400,12 @@ class Event:
             timestamp.astimezone(UTC)  # also reject offsets that overflow datetime's range
         except (ValueError, OverflowError):
             return None
-        return cls(event=kind, schema=data["schema"], **fields, **extra)
+        return cls(event=kind, schema=data["schema"], message=message, **fields, **extra)
 
     def to_dict(self) -> dict:
         data = {"schema": self.schema, "event": self.event, "workflow": self.workflow,
                 "run_id": self.run_id, "timestamp": self.timestamp}
-        for key in ("task", "status", "error", "attempt", "max_attempts", "delay_seconds", "failure_reason"):
+        for key in ("task", "status", "error", "attempt", "max_attempts", "delay_seconds", "failure_reason", "message"):
             if (value := getattr(self, key)) is not None:
                 data[key] = value
         return data
@@ -405,7 +476,8 @@ class UnitState:
 
 # --- History ----------------------------------------------------------------
 
-RunStatus = Literal["running", "succeeded", "failed", "incomplete"]
+RunStatus = Literal["running", "succeeded", "failed", "incomplete", "cancelled"]
+TaskStatus = Literal["running", "succeeded", "failed", "incomplete", "cancelled", "skipped"]
 
 
 def _iso(value: datetime | None) -> str | None:
@@ -436,7 +508,7 @@ class TaskRun:
     """One task within a recorded run. `incomplete`: the run ended mid-task."""
 
     name: str
-    status: RunStatus
+    status: TaskStatus
     started: datetime | None = None
     finished: datetime | None = None
     error: str | None = None

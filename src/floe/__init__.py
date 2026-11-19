@@ -8,6 +8,7 @@ data types in `floe.model` or raise `FloeError` subclasses.
 from .deploy import (
     Deployment,
     apply,
+    cancel,
     install,
     plan_install,
     start,
@@ -17,9 +18,10 @@ from .deploy import (
     user_unit_dir,
 )
 from .history import get_run, list_runs, run_logs
-from .inventory import check_installed, find_installed, list_installed, overview
+from .inventory import check_installed, find_installed, installed_timeout, installed_workers, list_installed, overview
 from .journal import Journal
 from .loader import load
+from .managed import run_managed
 from .model import (
     EVENT_SCHEMA,
     AttemptRun,
@@ -42,6 +44,7 @@ from .model import (
     ValidationError,
     Workflow,
     WorkflowSummary,
+    parallel,
 )
 from .runner import run
 from .store import UnitStore
@@ -51,8 +54,8 @@ __all__ = [
     "AttemptRun", "RetryPolicy", "EVENT_SCHEMA", "Deployment", "Event", "FloeError", "InstallPlan", "InstalledWorkflow",
     "Journal", "LoadError", "LogLine", "NotFoundError", "NotOwnedError", "Run", "RunLogs",
     "Systemd", "SystemdError", "TaskRun", "UninstallError", "UnitChange", "UnitState",
-    "UnitStore", "ValidationError", "Workflow", "WorkflowSummary", "apply", "check_installed",
-    "find_installed", "get_run", "install", "list_installed", "list_runs", "load", "overview",
-    "plan_install", "run", "run_logs", "start", "status", "uninstall", "unit_names",
+    "UnitStore", "ValidationError", "Workflow", "WorkflowSummary", "apply", "cancel", "check_installed",
+    "find_installed", "get_run", "install", "installed_timeout", "installed_workers", "list_installed", "list_runs", "load", "overview",
+    "parallel", "plan_install", "run", "run_logs", "run_managed", "start", "status", "uninstall", "unit_names",
     "user_unit_dir",
 ]

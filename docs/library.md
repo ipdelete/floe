@@ -58,6 +58,12 @@ The rules, enforced by `tests/test_boundaries.py`:
 - Tenacity is the sole third-party runtime dependency, confined to the runner's
   retry mechanism. Floe owns policies, events, history, and deployment.
 
+`Workflow(..., inputs={"consume": {"value": "produce"}})` passes run-local
+return values by keyword. `workflow.inputs` snapshots both mapping levels;
+`workflow.dag` includes binding and order-only prerequisites. `to_dict()` includes
+`inputs` for workflows declaring bindings, not result payloads. See
+[passing results](workflows.md#pass-small-results-to-downstream-tasks).
+
 `RetryPolicy(max_attempts, delay_seconds, retry_on)` is exported alongside
 `Workflow(..., retries={task_name: policy})`. Definition files expose the same
 optional `retries` mapping. `Workflow` snapshots it and aggregates invalid policy
@@ -69,6 +75,14 @@ fields with other definition problems. `TaskRun.attempts` contains exported
 `Deployment.python` defaults to the current interpreter's absolute, non-resolved
 path. Planning validates Python/dependency imports without loading workflow code
 in that subprocess. See [environment lifetime and migration](deployment.md#upgrade-existing-installations).
+
+`floe.parallel` marks Python functions without wrapping them. A constructed
+`Workflow.parallel_tasks` is the frozen set of marked task names. For a loaded
+workflow `to_dict()` includes a sorted `parallel_tasks` list if nonempty; it is
+absent for unmarked workflows. This metadata does not change `floe.run()`. `Deployment.for_workflow(workflow,
+workers=2)` opts an installed service into parallel mode. `floe.cancel(name,
+store, sd, task=...)` requests a stop in the current owned invocation. The
+service entry point uses `run_managed`; ordinary callers should use `run`.
 
 Workflow loading and task execution temporarily change Python's process-global
 import state. Use them serially, not concurrently with other threads importing

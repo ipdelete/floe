@@ -11,6 +11,7 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .managed import check_managed, request_cancel
 from .model import (
     InstallPlan,
     NotFoundError,
@@ -29,7 +30,7 @@ from .store import UnitStore
 from .systemd import Systemd, validate_calendars, validate_timeout
 
 __all__ = [
-    "Deployment", "apply", "install", "plan_install", "start", "status", "uninstall",
+    "Deployment", "apply", "cancel", "install", "plan_install", "start", "status", "uninstall",
     "unit_names", "user_unit_dir",
 ]
 
@@ -69,9 +70,12 @@ class Deployment:
     timeout: str = "30min"
     persistent: bool = True
     pythonpath: Path = PACKAGE_ROOT
+    workers: int = 1
 
     def __post_init__(self) -> None:
         check_name(self.workflow)
+        if type(self.workers) is not int or self.workers < 1:
+            raise ValidationError(['worker limit must be a positive integer'])
         schedule, problems = normalize_schedule(self.schedule)
         if problems:
             raise ValidationError(problems)
@@ -85,7 +89,10 @@ class Deployment:
     def for_workflow(cls, workflow: Workflow, **settings) -> Deployment:
         if workflow.source is None:
             raise ValidationError([f"workflow {workflow.name!r} has no source file to deploy"])
-        return cls(workflow.name, workflow.source, workflow.schedule, **settings)
+        deployment = cls(workflow.name, workflow.source, workflow.schedule, **settings)
+        if deployment.workers > 1:
+            check_managed(workflow, deployment.workers)
+        return deployment
 
     @property
     def service_name(self) -> str:
@@ -100,7 +107,7 @@ class Deployment:
         try:
             return {
                 self.service_name: render_service(
-                    self.workflow, script, self.python, self.timeout, self.pythonpath),
+                    self.workflow, script, self.python, self.timeout, self.pythonpath, self.workers),
                 self.timer_name: render_timer(
                     self.workflow, self.schedule, self.persistent, script, self.pythonpath),
             }
@@ -314,6 +321,24 @@ def uninstall(workflow: str, store: UnitStore, sd: Systemd) -> list[str]:
     if errors:
         raise UninstallError(removed, errors)
     return removed
+
+
+def cancel(workflow: str, store: UnitStore, sd: Systemd, *, task: str | None = None) -> str:
+    """Ask the current owned parallel invocation to cancel; return its full ID."""
+    if task is not None and (not isinstance(task, str) or not task):
+        raise ValidationError(['task must be a nonempty string'])
+    service, _ = unit_names(workflow)
+    props = sd.show(service, 'FragmentPath', 'InvocationID', 'MainPID', 'ActiveState')
+    if not store.owns_path(service, props.get('FragmentPath', '')):
+        raise NotOwnedError(f'{service} is not loaded from a Floe-owned file')
+    if props.get('ActiveState') not in ('activating', 'active') or not props.get('MainPID', '').isdigit():
+        raise NotFoundError(f'no live supervisor for {workflow!r}')
+    pid = int(props['MainPID'])
+    if not pid:
+        raise NotFoundError(f'no live supervisor for {workflow!r}')
+    run_id = props.get('InvocationID', '')
+    request_cancel(run_id, pid, task)
+    return run_id
 
 
 def start(workflow: str, sd: Systemd, *, wait: bool = True) -> None:

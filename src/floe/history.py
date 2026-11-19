@@ -296,7 +296,10 @@ def _log_lines(workflow: str, invocation: str, records: Iterable[dict]) -> Itera
         if event is None:
             yield LogLine(when, "output", message, task=task, priority=priority, attempt=attempt)
             continue
-        if event.event == "task_started":
+        if event.event == "task_output":
+            yield LogLine(when, "output", event.message, task=event.task, priority=priority)
+            continue
+        if event.schema != 3 and event.event == "task_started":
             task = event.task
             attempt = None
         elif event.event == "attempt_started":

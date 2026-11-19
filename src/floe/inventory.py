@@ -15,11 +15,11 @@ from .deploy import PACKAGE_ROOT, Deployment, plan_install, unit_names
 from .history import list_runs
 from .journal import Journal
 from .loader import load
-from .model import FloeError, InstalledWorkflow, NotFoundError, UnitState, WorkflowSummary
+from .model import FloeError, InstalledWorkflow, NotFoundError, UnitState, ValidationError, WorkflowSummary
 from .store import UnitStore
 from .systemd import Systemd
 
-__all__ = ["check_installed", "find_installed", "list_installed", "overview"]
+__all__ = ["check_installed", "find_installed", "installed_workers", "installed_timeout", "list_installed", "overview"]
 
 _CALENDAR = re.compile(r"\{ OnCalendar=(.*?) ; next_elapse=")
 _TIMER_PROPS = ("UnitFileState", "ActiveState", "TimersCalendar", "NextElapseUSecRealtime", "LastTriggerUSec")
@@ -98,6 +98,27 @@ def find_installed(store: UnitStore, name: str) -> InstalledWorkflow:
     raise NotFoundError(f"workflow {name!r} is not installed")
 
 
+def installed_workers(store: UnitStore, name: str) -> int:
+    """Recorded worker limit of an owned service; 1 for a new or legacy install."""
+    service, _ = unit_names(name)
+    if not store.is_owned(service):
+        return 1
+    value = store.metadata(service).get('Workers', '1')
+    try:
+        workers = int(value)
+    except ValueError:
+        workers = 0
+    if workers < 1:
+        raise ValidationError(['invalid installed Workers metadata; reinstall with --workers'])
+    return workers
+
+
+def installed_timeout(store: UnitStore, name: str) -> str:
+    """Recorded start timeout, or the default for a new or legacy install."""
+    service, _ = unit_names(name)
+    return store.metadata(service).get('Timeout', '30min') if store.is_owned(service) else '30min'
+
+
 def check_installed(installed: InstalledWorkflow, store: UnitStore) -> list[str]:
     """Whether the installed units still match the definition file.
 
@@ -107,7 +128,8 @@ def check_installed(installed: InstalledWorkflow, store: UnitStore) -> list[str]
         return []  # already reported by list_installed
     try:
         workflow = load(installed.script)
-        plan = plan_install(Deployment.for_workflow(workflow), store)
+        plan = plan_install(Deployment.for_workflow(workflow, workers=installed_workers(store, installed.name),
+                                                   timeout=installed_timeout(store, installed.name)), store)
     except FloeError as exc:
         return [f"definition does not load: {exc}"]
     if workflow.name != installed.name:

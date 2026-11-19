@@ -2,6 +2,7 @@
 into text and exit codes. No workflow or deployment logic lives here."""
 
 import argparse
+import asyncio
 import json
 import os
 import sys
@@ -18,7 +19,16 @@ __all__ = ["main"]
 
 def main(argv: list[str] | None = None, *, store: UnitStore | None = None,
          sd: floe.Systemd | None = None, journal: floe.Journal | None = None) -> int:
-    args = _parser().parse_args(argv)
+    argv = sys.argv[1:] if argv is None else argv
+    if argv[:1] == ['_managed-run']:
+        parser = argparse.ArgumentParser(prog='floe _managed-run')
+        parser.add_argument('script', type=Path)
+        parser.add_argument('workers', type=_positive)
+        parser.add_argument('workflow')
+        args = parser.parse_args(argv[1:])
+        args.handler = _managed_run
+    else:
+        args = _parser().parse_args(argv)
     try:
         return args.handler(args, _Context(store, sd, journal))
     except UninstallError as exc:
@@ -76,7 +86,14 @@ def _parser() -> argparse.ArgumentParser:
     _add_target(p, f"{definition} (to reinstall)")
     p.add_argument("--adopt", action="store_true", help="take over existing unit files not written by floe")
     p.add_argument("--dry-run", action="store_true", help="inspect and validate without writes or service-manager calls")
+    p.add_argument('--workers', type=_positive, help='maximum task workers (default: 1 for a new install)')
+    p.add_argument('--timeout', help='systemd workflow start timeout (default: 30min for a new install)')
     p.set_defaults(handler=_install)
+
+    p = sub.add_parser('cancel', help='request cancellation of a running parallel workflow or task')
+    p.add_argument('target', metavar='WORKFLOW', help='installed workflow name (not a file path)')
+    p.add_argument('--task', help='cancel only this active task')
+    p.set_defaults(handler=_cancel)
 
     target = "workflow definition file or installed workflow name"
     for name, handler, text in [
@@ -181,6 +198,24 @@ def _run(args, ctx) -> int:
         return 0 if floe.run(workflow, emit) else 1
 
 
+def _managed_run(args, ctx) -> int:
+    workflow = _load(args.script)
+    if workflow.name != args.workflow:
+        raise ValidationError(['the definition now names a different workflow; reinstall it'])
+    with _stdout_on_stderr() as events:
+        def emit(event: floe.Event) -> None:
+            sys.stderr.flush()
+            events.write(json.dumps(event.to_dict()) + '\n')
+            events.flush()
+        return 0 if asyncio.run(floe.run_managed(workflow, args.workers, emit)) else 1
+
+
+def _cancel(args, ctx) -> int:
+    run = floe.cancel(args.target, ctx.store, ctx.sd, task=args.task)
+    print(f'cancellation requested for {run}' + (f' task {args.task!r}' if args.task is not None else ''))
+    return 0
+
+
 @contextmanager
 def _stdout_on_stderr() -> Iterator:
     """Route workflow output to stderr, yielding the original stdout for events.
@@ -220,7 +255,10 @@ def _fileno(stream) -> int | None:
 
 
 def _install(args, ctx) -> int:
-    dep = floe.Deployment.for_workflow(_load(_definition(args.target, ctx, name=args.name)))
+    workflow = _load(_definition(args.target, ctx, name=args.name))
+    workers = args.workers if args.workers is not None else floe.installed_workers(ctx.store, workflow.name)
+    timeout = args.timeout if args.timeout is not None else floe.installed_timeout(ctx.store, workflow.name)
+    dep = floe.Deployment.for_workflow(workflow, workers=workers, timeout=timeout)
     plan = floe.plan_install(dep, ctx.store, adopt=args.adopt)
     if args.dry_run:
         for change in plan.changes:

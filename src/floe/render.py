@@ -57,7 +57,8 @@ def metadata(workflow: str, script: Path, pythonpath: Path) -> str:
     return f"[X-Floe]\nOwner=floe\nWorkflow={workflow}\nScript={script}\nFloe={pythonpath}\n"
 
 
-def render_service(workflow: str, script: Path, python: str, timeout: str, pythonpath: Path) -> str:
+def render_service(workflow: str, script: Path, python: str, timeout: str, pythonpath: Path,
+                   workers: int = 1) -> str:
     """The service runs `floe run <script>` with the given interpreter, finding
     floe through PYTHONPATH; the interpreter environment must provide Tenacity."""
     if not python.startswith("/"):
@@ -66,17 +67,25 @@ def render_service(workflow: str, script: Path, python: str, timeout: str, pytho
         raise ValueError("pythonpath must be absolute")
     check_value(python, "python")
     check_value(str(script), "script")
+    managed = workers > 1
+    command = ['_managed-run', str(script), str(workers), workflow] if managed else ['run', str(script)]
+    delegation = 'Delegate=yes\n' if managed else ''
+    settings = f'Workers={workers}\n' if managed else ''
+    if timeout != '30min':
+        settings += f'Timeout={timeout}\n'
     return (
         "# Managed by floe. Manual edits will be overwritten.\n\n"
         f"[Unit]\nDescription=Floe workflow {workflow}\n\n"
         "[Service]\nType=oneshot\n"
-        f"ExecStart={exec_line([python, '-m', 'floe_cli', 'run', str(script)])}\n"
+        f"ExecStart={exec_line([python, '-m', 'floe_cli', *command])}\n"
+        f"{delegation}"
         f"{environment('PYTHONPATH', str(pythonpath))}\n"
         f"WorkingDirectory={literal(str(script.parent))}\n"
         f"TimeoutStartSec={literal(timeout)}\n"
         "KillMode=control-group\nStandardOutput=journal\nStandardError=journal\n"
         f"SyslogIdentifier={workflow}\n\n"
         f"{metadata(workflow, script, pythonpath)}Python={python}\n"
+        f"{settings}"
     )
 
 

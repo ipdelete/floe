@@ -13,7 +13,13 @@ floe status mydag                             # systemd's view of service and ti
 floe uninstall mydag                          # disable, stop, delete the unit files
 ```
 
-Every command accepts the workflow file or, once installed, the workflow name.
+`floe install --workers N` sets the limit for
+[installed parallel runs](workflows.md#run-independent-tasks-in-parallel).
+`floe install --timeout 5min` overrides the whole-run systemd start timeout.
+Omitted options keep recorded values when reinstalling, otherwise default to one
+worker and 30 minutes. `floe cancel` takes the installed name, never a path.
+
+Other deployment commands accept the workflow file or, once installed, the workflow name.
 By default, targets ending in `.py` or containing `/` are files; anything else
 is a name. Pass `--name` to explicitly interpret the target as a workflow name,
 for example `floe uninstall --name report.py`. This also works for already-installed
