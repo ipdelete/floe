@@ -75,6 +75,8 @@ For consequential choices, maintain an effort-local `decisions.md`. Capture deci
 
 ## Current efforts
 
+- [Parallel tasks](parallel-tasks/design.md): proposed execution and cancellation model for #8; [evidence and approval status](parallel-tasks/decisions.md).
+
 - [Task retries](task-retries/decisions.md): approved policy/deployment direction,
   event compatibility, and validation scope for issue #6.
 
