@@ -69,7 +69,8 @@ The small inline tag/version/changelog check has regression tests in
 
 ## Opt-in real-session tests
 
-With explicit approval, the managed-worker validation can be selected on its own:
+With explicit approval, the **live managed-worker integration test** can be
+selected on its own:
 
 ```bash
 uv run pytest -q tests/test_managed_systemd_e2e.py --systemd-e2e
@@ -84,6 +85,11 @@ collects the child's actual exit status separately. The test checks unit
 collection and cgroup removal. It does **not** test supervisor death or replace
 installed-service lifecycle tests. Never run this or the full real-session suite
 without explicit authorization for the target session.
+
+`tests/test_parallel_systemd_e2e.py` is the product-level counterpart: it uses
+`floe install`, `start`, `cancel`, `logs` and `uninstall`, without calling the
+worker or scheduler under test. Select it explicitly with `--systemd-e2e` only
+with authorization to install the generated services in the target session.
 
 To test against your real user systemd session and journald:
 

@@ -71,15 +71,21 @@ class RunResults:
     def arguments(self, consumer: str) -> dict:
         return {key: json.loads(self.values[p]) for key, p in self.inputs.get(consumer, {}).items()}
 
-    def complete(self, name: str, result: object) -> None:
-        # Called after a successful call, outside the retryable task exception boundary.
+    def release_inputs(self, name: str) -> None:
         for p in set(self.inputs.get(name, {}).values()):
             self.remaining[p] -= 1
             if not self.remaining[p]:
-                self.retained -= len(self.values.pop(p))
-        if self.remaining[name]:
-            encoded = _encode(result, name)
-            if self.retained + len(encoded) > MAX_RETAINED_BYTES:
+                self.retained -= len(self.values.pop(p, b''))
+
+    def complete(self, name: str, result: object) -> None:
+        # Validate before committing either the release or publication.
+        encoded = _encode(result, name) if self.remaining[name] else None
+        if encoded is not None:
+            freed = sum(len(self.values[p]) for p in set(self.inputs.get(name, {}).values())
+                        if self.remaining[p] == 1)
+            if self.retained - freed + len(encoded) > MAX_RETAINED_BYTES:
                 raise ValidationError([f"bound result of task {name!r}: run exceeds retained byte limit"])
+        self.release_inputs(name)
+        if encoded is not None:
             self.values[name] = encoded
             self.retained += len(encoded)

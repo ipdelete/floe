@@ -79,7 +79,10 @@ in that subprocess. See [environment lifetime and migration](deployment.md#upgra
 `floe.parallel` marks Python functions without wrapping them. A constructed
 `Workflow.parallel_tasks` is the frozen set of marked task names. For a loaded
 workflow `to_dict()` includes a sorted `parallel_tasks` list if nonempty; it is
-absent for unmarked workflows. This metadata does not change `floe.run()`.
+absent for unmarked workflows. This metadata does not change `floe.run()`. `Deployment.for_workflow(workflow,
+workers=2)` opts an installed service into parallel mode. `floe.cancel(name,
+store, sd, task=...)` requests a stop in the current owned invocation. The
+service entry point uses `run_managed`; ordinary callers should use `run`.
 
 Workflow loading and task execution temporarily change Python's process-global
 import state. Use them serially, not concurrently with other threads importing

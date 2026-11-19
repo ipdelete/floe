@@ -52,13 +52,14 @@ values), before any task runs. When planning an installation, including
 `systemd-analyze` before either unit can be written. Direct execution does not
 need systemd tools.
 
-Tasks run one at a time. Without a retry policy, an exception stops the workflow,
+By default tasks run one at a time. Without a retry policy, an exception stops the workflow,
 records failure, and returns a nonzero exit code. Tasks following the failure are not executed,
 including independent tasks later in the execution order.
 
-An optional `@parallel` marker declares which Python functions would be eligible
-for overlapping execution. It changes neither the signature nor the behavior of
-the decorated function. For example:
+## Run independent tasks in parallel
+
+The optional `@parallel` marker makes a function eligible to overlap with other
+marked tasks when installed in parallel mode. It leaves the function unchanged. For example:
 
 ```python
 from floe import parallel
@@ -72,14 +73,43 @@ Register `fetch` in `tasks` as usual. The mark belongs to the function, not to
 one dictionary entry: aliases of that function are marked in newly constructed
 workflows. Existing workflows keep their snapshot. To give two registrations
 different eligibility, decorate a separate function that calls the shared helper.
-The marker does **not** create workers,
-change dependencies, or enable cancellation. The current CLI, library runner
-and installed services all still execute one task at a time.
+Then opt in when installing: `floe install flow.py --workers 2`. A limit of 1
+(the default for new installs) uses the existing in-process runner. Reinstalling
+without `--workers` retains the recorded limit; `--workers 1` disables parallel
+mode. Direct `floe run` and `floe.run()` remain sequential. `@parallel` does not
+remove dependencies. An unmarked task waits for active work to drain and runs
+alone. The limit caps active task executions, including those draining on exit;
+short tasks and mixed workflows may not speed up.
+
+Parallel mode requires a delegated user systemd service, Linux cgroup v2 with
+`cgroup.kill`, and Python/Linux support for pidfds and memfd. It fails instead of
+silently dropping containment. The supervisor loads the workflow, and each
+worker loads it again before calling its task. Keep the definition and helpers
+stable throughout the run. Do not rely on top-level code running only once or
+on global mutations propagating to another task. Use [result bindings](#pass-small-results-to-downstream-tasks)
+or files instead. Parallel installations reject workflows with retry policies;
+sequential retries are unchanged. Each task group is a cleanup boundary for
+trusted, cooperative code, not a sandbox.
+
+While a parallel run is active, `floe cancel NAME --task A` hard-stops A and its
+task group. Tasks that require A's success are skipped; unrelated branches can
+continue. `floe cancel NAME` hard-stops active tasks and prevents new ones from
+starting. A successful response acknowledges the request, not completion; check
+`floe runs` or `floe logs` for final state. A task request is rejected if the task
+isn't active or was already requested. Ordinary failure stops new launches but
+lets active peers finish; failed takes precedence over cancelled. A cancelled
+run is not a successful start.
+
+A result is available only after successful exit, output drain and task-group
+removal. After worker exit, output and descendants get up to two seconds to
+finish; on timeout Floe kills the group, fails the task and withholds its result.
+Systemd bounds the whole service separately. External termination without a
+terminal event is incomplete, not evidence of cancellation or success.
 
 stdout carries only Floe's events. Definition/import output is routed to stderr
 at the CLI boundary, including subprocess and raw file-descriptor writes. This
 also keeps `floe list --check --json` parseable when checking noisy definitions.
-During task execution, `floe run` sends task stdout to stderr, whether from
+During sequential task execution, `floe run` sends task stdout to stderr, whether from
 `print()` or child processes, and flushes Python's output before each event so
 that output stays
 with the task that wrote it. End output lines with a newline: under systemd,
@@ -89,7 +119,7 @@ to the next event, which history then cannot recognize.
 ## Pass small results to downstream tasks
 
 Set `inputs[consumer][keyword] = producer` to pass a producer's return value to a
-consumer. For example, in a definition with `WORKFLOW = "inventory"`:
+consumer in either execution mode. For example, in a definition with `WORKFLOW = "inventory"`:
 
 ```python
 def prices():
@@ -109,7 +139,7 @@ inputs = {"C": {"prices": "A", "quantities": "B"}}
 `inputs` is now a reserved definition-file global; rename any unrelated helper
 variable with that name before upgrading. Each binding adds a prerequisite; don't repeat it in `dag`. An ordinary DAG
 edge waits without passing a value. A bound consumer must accept the named
-keyword arguments. Tasks still run **sequentially**. Only a successful producer
+keyword arguments. Only a successful producer
 supplies its value; a failed prerequisite prevents the whole call, not just
 one argument. `None` is a valid result, not a missing value. Printing is still
 logging. A synchronous return nobody binds is ignored as before.

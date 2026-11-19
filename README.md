@@ -1,11 +1,11 @@
 # Floe
 
 A minimal local workflow runner using Python, systemd timers, and journald.
-Tasks are Python functions executed sequentially in dependency order. systemd
+Tasks are Python functions executed in dependency order, sequentially by default. systemd
 handles scheduling and process lifecycle; journald stores execution history.
 Tasks can opt into bounded retries using Tenacity, Floe's only runtime dependency.
 Tasks can [pass small return values by keyword](docs/workflows.md#pass-small-results-to-downstream-tasks).
-There is no parallel execution.
+Installed workflows can [opt in to bounded parallel workers](docs/workflows.md#run-independent-tasks-in-parallel).
 
 ## Requirements
 

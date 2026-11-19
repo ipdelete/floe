@@ -110,6 +110,8 @@ async def _drain(sock, consume):
     loop = asyncio.get_running_loop()
     while chunk := await loop.sock_recv(sock, 65536):
         consume(chunk)
+        # A continuously readable stream must not starve peer workers or control.
+        await asyncio.sleep(0)
 
 
 async def _wait_exit(proc, fd):
@@ -143,7 +145,7 @@ def _check_timeout(value):
 
 
 async def observe_managed_worker(workflow: Workflow, task: str, results: RunResults, run_id: str,
-                                 on_output: Callable[[str, bytes], None], *, timeout: float,
+                                 on_output: Callable[[str, bytes], None], *, timeout: float | None,
                                  drain_timeout: float, cleanup_timeout: float) -> WorkerEvidence:
     """Return terminal evidence only after the task group is verified empty and removed.
 
@@ -151,7 +153,9 @@ async def observe_managed_worker(workflow: Workflow, task: str, results: RunResu
     clean the owned group. A cleanup error is not a successful cancellation.
     No public launch path; requires an already delegated service cgroup.
     """
-    for value in (timeout, drain_timeout, cleanup_timeout):
+    if timeout is not None:
+        _check_timeout(timeout)
+    for value in (drain_timeout, cleanup_timeout):
         _check_timeout(value)
     async with managed_group(cleanup_timeout) as group:
         return await _observe(workflow, task, results, run_id, on_output, timeout, group, drain_timeout)
@@ -221,7 +225,8 @@ async def _observe(workflow, task, results, run_id, on_output, timeout, group, d
                         # Shorten, never extend, the run budget. This also bounds
                         # inherited output writers even if the group is now empty.
                         end = asyncio.get_running_loop().time() + drain_timeout
-                        budget.reschedule(min(budget.when(), end))
+                        deadline = budget.when()
+                        budget.reschedule(end if deadline is None else min(deadline, end))
                         await group.wait_empty()
                     return rc
 

@@ -30,7 +30,15 @@ malformed event-shaped output, remains ordinary output. If a task invokes a
 different workflow with `floe run`, that child's events remain output of the
 parent task, even when the child inherits the same systemd invocation ID.
 
+Installed parallel runs write schema-3 records. `floe logs --json` exposes worker
+output as `kind: "output"` with an explicit `task` field, independent of which
+worker wrote first. Long output is split into chunks; invalid UTF-8 is replaced.
+Task results aren't journaled. `cancelled` and `skipped` distinguish a confirmed
+stop from a task that was never launched. Sequential schemas 1 and 2 are unchanged.
+
 A run's ID is its systemd invocation ID. Its status is:
+
+- `cancelled`: the supervisor recorded a confirmed cancellation and no failure.
 
 - `succeeded` / `failed`: from the run's `run_completed` event. A run that
   failed before starting (for example an invalid definition) is `failed` with

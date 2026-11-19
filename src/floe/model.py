@@ -313,8 +313,8 @@ def _graph_problems(tasks: dict, dag: dict[str, frozenset[str]]) -> list[str]:
 # --- Run events ---------------------------------------------------------------
 
 EventKind = Literal["run_started", "task_started", "task_completed", "run_completed",
-                    "attempt_started", "attempt_completed", "retry_scheduled"]
-Status = Literal["succeeded", "failed"]
+                    "attempt_started", "attempt_completed", "retry_scheduled", "task_output"]
+Status = Literal["succeeded", "failed", "cancelled", "skipped"]
 
 
 @dataclass(frozen=True)
@@ -334,14 +334,18 @@ class Event:
     delay_seconds: float | None = None
     failure_reason: Literal["exhausted", "non_retryable"] | None = None
 
+    message: str | None = None
+
     @classmethod
     def from_dict(cls, data: object) -> Event | None:
         """Parse a JSON event, or return None if it isn't one of this schema."""
-        if not isinstance(data, dict) or type(data.get("schema")) is not int or data["schema"] not in (1, 2):
+        if not isinstance(data, dict) or type(data.get("schema")) is not int or data["schema"] not in (1, 2, 3):
             return None
         kinds = ("run_started", "task_started", "task_completed", "run_completed")
         if data["schema"] == 2:
             kinds += ("attempt_started", "attempt_completed", "retry_scheduled")
+        elif data["schema"] == 3:
+            kinds += ("task_output",)
         if data.get("event") not in kinds:
             return None
         fields = {key: data.get(key) for key in ("workflow", "run_id", "timestamp", "task", "status", "error")}
@@ -373,8 +377,17 @@ class Event:
                 return None
         elif fields["task"] is not None:
             return None
+        message = data.get("message")
+        if kind == "task_output":
+            if not isinstance(message, str) or len(message) > 1024:
+                return None
+        elif message is not None:
+            return None
         if kind.endswith("_completed"):
-            if fields["status"] not in ("succeeded", "failed"):
+            statuses = ("succeeded", "failed")
+            if data["schema"] == 3:
+                statuses += ("cancelled",) if kind == "run_completed" else ("cancelled", "skipped")
+            if fields["status"] not in statuses:
                 return None
         elif fields["status"] is not None:
             return None
@@ -387,12 +400,12 @@ class Event:
             timestamp.astimezone(UTC)  # also reject offsets that overflow datetime's range
         except (ValueError, OverflowError):
             return None
-        return cls(event=kind, schema=data["schema"], **fields, **extra)
+        return cls(event=kind, schema=data["schema"], message=message, **fields, **extra)
 
     def to_dict(self) -> dict:
         data = {"schema": self.schema, "event": self.event, "workflow": self.workflow,
                 "run_id": self.run_id, "timestamp": self.timestamp}
-        for key in ("task", "status", "error", "attempt", "max_attempts", "delay_seconds", "failure_reason"):
+        for key in ("task", "status", "error", "attempt", "max_attempts", "delay_seconds", "failure_reason", "message"):
             if (value := getattr(self, key)) is not None:
                 data[key] = value
         return data
@@ -463,7 +476,8 @@ class UnitState:
 
 # --- History ----------------------------------------------------------------
 
-RunStatus = Literal["running", "succeeded", "failed", "incomplete"]
+RunStatus = Literal["running", "succeeded", "failed", "incomplete", "cancelled"]
+TaskStatus = Literal["running", "succeeded", "failed", "incomplete", "cancelled", "skipped"]
 
 
 def _iso(value: datetime | None) -> str | None:
@@ -494,7 +508,7 @@ class TaskRun:
     """One task within a recorded run. `incomplete`: the run ended mid-task."""
 
     name: str
-    status: RunStatus
+    status: TaskStatus
     started: datetime | None = None
     finished: datetime | None = None
     error: str | None = None
