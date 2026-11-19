@@ -32,7 +32,8 @@ parent task, even when the child inherits the same systemd invocation ID.
 
 Installed parallel runs write schema-3 records. `floe logs --json` exposes worker
 output as `kind: "output"` with an explicit `task` field, independent of which
-worker wrote first. Long output is split into chunks; invalid UTF-8 is replaced.
+worker wrote first. Untagged supervisor or definition output is not assigned to
+an arbitrary task. Long output is split into chunks; invalid UTF-8 is replaced.
 Task results aren't journaled. `cancelled` and `skipped` distinguish a confirmed
 stop from a task that was never launched. Sequential schemas 1 and 2 are unchanged.
 

@@ -98,7 +98,9 @@ starting. A successful response acknowledges the request, not completion; check
 `floe runs` or `floe logs` for final state. A task request is rejected if the task
 isn't active or was already requested. Ordinary failure stops new launches but
 lets active peers finish; failed takes precedence over cancelled. A cancelled
-run is not a successful start.
+run is not a successful start. The local cancellation endpoint is scoped to
+this user's live supervisor invocation; it does not isolate processes that
+already run as the same user.
 
 A result is available only after successful exit, output drain and task-group
 removal. After worker exit, output and descendants get up to two seconds to
