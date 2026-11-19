@@ -11,6 +11,9 @@ moves into a dated version section when preparing a release PR.
   explicit retryable exceptions, preserved attempt history and output attribution,
   and CLI/dashboard retry states. Sequential execution remains unchanged.
 
+- `@parallel` eligibility metadata for Python task functions, visible on
+  `Workflow.parallel_tasks`. It does not enable concurrent execution.
+
 ### Changed
 
 - Tenacity is now a required runtime dependency. Services use the absolute

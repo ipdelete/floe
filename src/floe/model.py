@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from graphlib import CycleError, TopologicalSorter
 from pathlib import Path
-from types import MappingProxyType
+from types import FunctionType, MappingProxyType, MethodType
 from typing import Literal
 
 EVENT_SCHEMA = 2
@@ -130,6 +130,23 @@ def _valid_delay(value: object) -> bool:
 
 # --- Workflow ---------------------------------------------------------------
 
+_PARALLEL_MARK = object()
+
+
+def parallel[F](task: F) -> F:
+    """Mark a Python task function as eligible for overlap; never schedule or wrap it."""
+    if not isinstance(task, FunctionType):
+        raise ValidationError(["@parallel must decorate a Python function"])
+    task.__floe_parallel__ = _PARALLEL_MARK
+    return task
+
+
+def _parallel_eligible(task: Callable) -> bool:
+    if isinstance(task, MethodType):
+        task = task.__func__
+    return isinstance(task, FunctionType) and vars(task).get('__floe_parallel__') is _PARALLEL_MARK
+
+
 @dataclass(frozen=True)
 class RetryPolicy:
     """Finite per-task retries; retry_on must explicitly name ordinary exceptions."""
@@ -174,6 +191,7 @@ class Workflow:
     source: Path | None = None
     retries: Mapping[str, RetryPolicy] = field(default_factory=dict)
     order: tuple[str, ...] = field(init=False)
+    parallel_tasks: frozenset[str] = field(init=False)
 
     def __post_init__(self) -> None:
         schedule, schedule_errors = normalize_schedule(self.schedule)
@@ -210,10 +228,13 @@ class Workflow:
         object.__setattr__(self, "schedule", schedule)
         object.__setattr__(self, "source", None if self.source is None else Path(self.source))
         object.__setattr__(self, "order", order)
+        eligible = frozenset(name for name, task in tasks.items() if _parallel_eligible(task))
+        object.__setattr__(self, "parallel_tasks", eligible)
 
     def to_dict(self) -> dict:
         return {
             "name": self.name,
+            **({"parallel_tasks": sorted(self.parallel_tasks)} if self.parallel_tasks else {}),
             "schedule": list(self.schedule),
             "source": None if self.source is None else str(self.source),
             "order": list(self.order),

@@ -56,6 +56,22 @@ Tasks run one at a time. Without a retry policy, an exception stops the workflow
 records failure, and returns a nonzero exit code. Tasks following the failure are not executed,
 including independent tasks later in the execution order.
 
+An optional `@parallel` marker declares which Python functions would be eligible
+for overlapping execution. It changes neither the signature nor the behavior of
+the decorated function. For example:
+
+```python
+from floe import parallel
+
+@parallel
+def fetch():
+    return 42
+```
+
+Register `fetch` in `tasks` as usual. The marker does **not** create workers,
+change dependencies, or enable cancellation. The current CLI, library runner
+and installed services all still execute one task at a time.
+
 stdout carries only Floe's events. Definition/import output is routed to stderr
 at the CLI boundary, including subprocess and raw file-descriptor writes. This
 also keeps `floe list --check --json` parseable when checking noisy definitions.

@@ -70,6 +70,11 @@ fields with other definition problems. `TaskRun.attempts` contains exported
 path. Planning validates Python/dependency imports without loading workflow code
 in that subprocess. See [environment lifetime and migration](deployment.md#upgrade-existing-installations).
 
+`floe.parallel` marks Python functions without wrapping them. A constructed
+`Workflow.parallel_tasks` is the frozen set of marked task names. For a loaded
+workflow `to_dict()` includes a sorted `parallel_tasks` list if nonempty; it is
+absent for unmarked workflows. This metadata does not change `floe.run()`.
+
 Workflow loading and task execution temporarily change Python's process-global
 import state. Use them serially, not concurrently with other threads importing
 same-named sibling modules.

@@ -42,6 +42,7 @@ from .model import (
     ValidationError,
     Workflow,
     WorkflowSummary,
+    parallel,
 )
 from .runner import run
 from .store import UnitStore
@@ -53,6 +54,6 @@ __all__ = [
     "Systemd", "SystemdError", "TaskRun", "UninstallError", "UnitChange", "UnitState",
     "UnitStore", "ValidationError", "Workflow", "WorkflowSummary", "apply", "check_installed",
     "find_installed", "get_run", "install", "list_installed", "list_runs", "load", "overview",
-    "plan_install", "run", "run_logs", "start", "status", "uninstall", "unit_names",
+    "parallel", "plan_install", "run", "run_logs", "start", "status", "uninstall", "unit_names",
     "user_unit_dir",
 ]
