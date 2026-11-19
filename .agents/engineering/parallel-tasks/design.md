@@ -1,6 +1,6 @@
 # Parallel task execution: proposed first release
 
-**For maintainer review, not an accepted API.** [Issue #8](https://github.com/ipdelete/floe/issues/8) · [decision record](decisions.md). Floe still runs sequentially. The design question is whether to offer a deliberately different, opt-in execution mode rather than change what existing tasks mean.
+**Design direction approved; proposed syntax is not a shipped API.** [Issue #8](https://github.com/ipdelete/floe/issues/8) · [decision record](decisions.md). Floe still runs sequentially. The design question is whether to offer a deliberately different, opt-in execution mode rather than change what existing tasks mean.
 
 ## Author contract: eligibility, order, and data are separate
 
