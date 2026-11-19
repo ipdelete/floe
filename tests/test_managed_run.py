@@ -89,6 +89,7 @@ def test_control_reaches_supervisor_before_terminal_commit(tmp_path, monkeypatch
         'A': 'failed' if failed else 'cancelled', 'B': 'cancelled' if whole else 'succeeded',
         'C': 'skipped', 'D': 'skipped' if whole or failed else 'succeeded'}
     assert events[-1].status == ('failed' if failed else 'cancelled')
+    assert events[-1].error == ('cleanup unconfirmed' if failed else None)
     assert [e.message for e in events if e.event == 'task_output'] == ['partial☃']
     assert [floe.Event.from_dict(e.to_dict()) for e in events] == events
 

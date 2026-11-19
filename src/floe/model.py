@@ -349,12 +349,11 @@ def _valid_retry_fields(kind: EventKind, schema: int, status: Status | None, *,
     if kind in _RETRY_EVENTS:
         if type(attempt) is not int or type(max_attempts) is not int or not 1 <= attempt <= max_attempts:
             return False
+        if kind == "retry_scheduled":
+            return failure_reason is None and _valid_delay(delay_seconds) and attempt < max_attempts
     elif attempt is not None or max_attempts is not None:
         return False
-    if kind == "retry_scheduled":
-        if not _valid_delay(delay_seconds) or attempt >= max_attempts:
-            return False
-    elif delay_seconds is not None:
+    if delay_seconds is not None:
         return False
     return failure_reason is None or (schema == 2 and kind == "task_completed" and status == "failed"
                                      and failure_reason in ("exhausted", "non_retryable"))

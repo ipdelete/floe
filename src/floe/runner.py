@@ -104,6 +104,7 @@ def _run_with_retries(name: str, task: Callable[..., object], results: RunResult
     for attempt in retrying:
         fields = dict(task=name, attempt=attempt.retry_state.attempt_number, max_attempts=policy.max_attempts)
         emit("attempt_started", **fields)
+        result = None
         kwargs = results.arguments(name)
         # Only the task call belongs inside Tenacity's exception boundary.
         with attempt:
@@ -129,7 +130,8 @@ def _run_with_retries(name: str, task: Callable[..., object], results: RunResult
         emit("attempt_completed", **fields, status="failed", error=failure.message)
         if not retryable:
             return failure
-    # Tenacity stops yielding after the final retryable failure.
+    # A validated policy allows at least one attempt. Reaching here means
+    # Tenacity exhausted the attempts after recording a retryable failure.
     return failure
 
 
