@@ -27,13 +27,15 @@ command, deployment planning, and offline unit verification. It does not contact
 ## Engineering methods
 
 For session initialization and agent-document authoring, see the
-[project skills](../.agents/README.md).
+[project skills](README.md).
 
 Use the repository's [Spike, Design, and Implement skills](engineering/README.md)
 to investigate uncertainty, make evidence-based decisions, and build against the
 resulting intent. They are complementary methods, not required stages for every
 change. Keep useful findings and consequential decisions under
-`docs/engineering/<effort>/`; prototypes are disposable by default.
+`.agents/engineering/<effort>/`; prototype code stays in each effort's
+`experiments/` directory on spike branches only. Product documentation stays in
+`docs/`.
 
 For disposable experiments, use the
 [spike branch and evidence-handoff workflow](engineering/README.md#spike-branches-and-handoff):
@@ -61,7 +63,7 @@ No installed workflow is started and no systemd session is modified.
 Distributions and checksums are saved as Actions artifacts for 30 days. The
 [Release workflow](../.github/workflows/release.yml) reuses CI for a version tag
 and publishes the exact saved files after approval, not rebuilt distributions.
-See [Releases](releases.md) for setup, version policy, and the maintainer steps.
+See [Releases](../docs/releases.md) for setup, version policy, and maintainer steps.
 The small inline tag/version/changelog check has regression tests in
 `tests/test_release_version.py`; there is no custom publisher or CI image.
 
