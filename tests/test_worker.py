@@ -2,6 +2,9 @@
 
 import asyncio
 import json
+import os
+import socket
+import tempfile
 from pathlib import Path
 import textwrap
 
@@ -85,6 +88,7 @@ def test_two_actual_workers_then_exclusive_join(tmp_path):
     ('os._exit(0)', 0, 'missing terminal'),
     ('atexit.register(os._exit, 17); return 8', 17, 'exited unsuccessfully'),
     ('return (1, 2)', 1, 'expected a JSON value'),
+    ('return "x" * (1 << 20)', 1, 'per-result byte limit'),
 ])
 def test_dont_release_result_on_missing_or_contradictory_evidence(tmp_path, action, rc, diagnostic):
     workflow = definition(tmp_path, f'''
@@ -123,6 +127,34 @@ def test_callback_failure_reaps_worker(tmp_path):
     with pytest.raises(RuntimeError, match='sink failed'):
         asyncio.run(observe_worker(workflow, 'A', RunResults({}), 'test', consume, timeout=5))
     assert not Path(f'/proc/{int(seen)}').exists()
+
+
+def test_open_output_writer_times_out_even_after_clean_worker_exit(tmp_path):
+    # Hold a copy of the output writer outside the process. Same EOF semantics
+    # as a detached descendant, with no orphan/zombie fixture left in PID 1.
+    with tempfile.TemporaryDirectory() as directory, socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as sink:
+        address = str(Path(directory) / 'sink')
+        sink.bind(address)
+        sink.settimeout(1)
+        workflow = definition(tmp_path, f'''
+            import os, socket
+            def a():
+                with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as sock:
+                    sock.connect({address!r})
+                    socket.send_fds(sock, [str(os.getpid()).encode()], [1])
+            tasks = {{'A': a}}
+            dag = {{'A': ()}}
+        ''')
+        with pytest.raises(TimeoutError):
+            asyncio.run(observe_worker(workflow, 'A', RunResults({}), 'test', lambda *args: None, timeout=1.5))
+        pid, fds, _, _ = socket.recv_fds(sink, 64, 1)
+        try:
+            assert len(fds) == 1
+            with pytest.raises(ChildProcessError):
+                os.waitpid(int(pid), os.WNOHANG)
+        finally:
+            for fd in fds:
+                os.close(fd)
 
 
 def test_changed_prerequisites_rejected_before_task_call(tmp_path):

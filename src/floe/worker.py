@@ -36,9 +36,9 @@ def _frame(payload):
 
 def _read_frame(stream, limit):
     size = stream.read(4)
-    if len(size) != 4 or int.from_bytes(size) > limit:
-        raise _problem('invalid frame length')
     count = int.from_bytes(size)
+    if len(size) != 4 or count > limit:
+        raise _problem('invalid frame length')
     data = stream.read(count)
     if len(data) != count:
         raise _problem('incomplete frame')
@@ -111,19 +111,15 @@ async def _drain(sock, consume):
         consume(chunk)
 
 
-async def _wait_exit(proc):
+async def _wait_exit(proc, fd):
     loop = asyncio.get_running_loop()
-    fd = os.pidfd_open(proc.pid)
     ready = asyncio.Event()
+    loop.add_reader(fd, ready.set)
     try:
-        loop.add_reader(fd, ready.set)
-        try:
-            await ready.wait()
-        finally:
-            loop.remove_reader(fd)
-        return proc.wait()
+        await ready.wait()
+        return proc.wait()  # pidfd is readable: this owned child has exited
     finally:
-        os.close(fd)
+        loop.remove_reader(fd)
 
 
 async def observe_worker(workflow: Workflow, task: str, results: RunResults, run_id: str,
@@ -132,7 +128,9 @@ async def observe_worker(workflow: Workflow, task: str, results: RunResults, run
 
     Call only for controlled local fixtures until a managed launcher provides
     containment before definition loading. On exceptional exit we reap the
-    direct worker, NOT arbitrary descendants. Never infer ownership from a PID.
+    direct worker, NOT arbitrary descendants. An inherited writer can therefore
+    cause TimeoutError after worker exit; do not treat that as a result. The
+    nonce correlates evidence, not authentication against trusted user code.
     """
     if type(timeout) not in (int, float) or not 0 < timeout < math.inf:
         raise _problem('observation timeout must be finite and positive')
@@ -150,6 +148,8 @@ async def observe_worker(workflow: Workflow, task: str, results: RunResults, run
         request = stack.enter_context(os.fdopen(os.memfd_create('floe-worker'), 'w+b'))
         request.write(_frame(info))
         for p in sorted(set(bindings.values())):
+            if p not in results.values:
+                raise _problem(f'no committed result for prerequisite {p!r}')
             request.write(_frame(results.values[p]))
         request.seek(0)
         reply, child_reply = socket.socketpair()
@@ -167,6 +167,8 @@ async def observe_worker(workflow: Workflow, task: str, results: RunResults, run
                                 pass_fds=(request.fileno(), child_reply.fileno()),
                                 env={**os.environ, 'FLOE_RUN_ID': run_id})
         try:
+            pidfd = os.pidfd_open(proc.pid)
+            stack.callback(os.close, pidfd)
             child_output.close()
             child_reply.close()
             message = bytearray()
@@ -177,7 +179,7 @@ async def observe_worker(workflow: Workflow, task: str, results: RunResults, run
                 message.extend(chunk)
 
             readers = [asyncio.create_task(coro) for coro in (
-                _wait_exit(proc), _drain(reply, append), _drain(output, lambda data: on_output(task, data)))]
+                _wait_exit(proc, pidfd), _drain(reply, append), _drain(output, lambda data: on_output(task, data)))]
             try:
                 async with asyncio.timeout(timeout):
                     rc, _, _ = await asyncio.gather(*readers)
