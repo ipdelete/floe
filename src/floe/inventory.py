@@ -168,9 +168,12 @@ def overview(store: UnitStore, sd: Systemd, journal: Journal, *, verify: bool = 
                 next_run=_timestamp(values.get("NextElapseUSecRealtime", "")),
                 last_trigger=_timestamp(values.get("LastTriggerUSec", "")),
             )
+        except (FloeError, OSError) as exc:
+            problems.append(str(exc))
+        try:
             runs = list_runs(installed.name, journal, sd, limit=1, since=since, max_records=max_records)
             summary = replace(summary, last_run=runs[0] if runs else None)
-        except FloeError as exc:
+        except (FloeError, OSError) as exc:
             problems.append(str(exc))
         summaries.append(replace(summary, problems=tuple(problems)))
     return summaries

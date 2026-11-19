@@ -64,7 +64,8 @@ def list_runs(workflow: str, journal: Journal, sd: Systemd, *,
 
 def get_run(workflow: str, run_id: str | None, journal: Journal, sd: Systemd) -> Run:
     """One run by full ID or unique prefix; the latest run if run_id is None."""
-    return run_logs(workflow, run_id, journal, sd).run
+    run, _ = _read_run(workflow, run_id, journal, sd, max_records=None)
+    return run
 
 
 def run_logs(workflow: str, run_id: str | None, journal: Journal, sd: Systemd, *,
@@ -74,13 +75,19 @@ def run_logs(workflow: str, run_id: str | None, journal: Journal, sd: Systemd, *
     Bounded reads mark Run.truncated when older records were omitted. Task and
     timing information may then be partial; missing starts have no duration.
     """
+    run, records = _read_run(workflow, run_id, journal, sd, max_records=max_records)
+    lines = records[-max_records:] if max_records is not None else records
+    return RunLogs(run, tuple(_log_lines(workflow, run.run_id, lines)))
+
+
+def _read_run(workflow: str, run_id: str | None, journal: Journal, sd: Systemd, *,
+              max_records: int | None) -> tuple[Run, list[dict]]:
     _check_record_limit(max_records)
     service, _ = unit_names(workflow)
     invocation, records = _find(service, run_id, journal, max_records=max_records)
     run = _build_run(workflow, invocation, records, invocation == _active_invocation(service, sd),
                      max_records=max_records)
-    lines = records[-max_records:] if max_records is not None else records
-    return RunLogs(run, tuple(_log_lines(workflow, invocation, lines)))
+    return run, records
 
 
 def _check_record_limit(value: int | None) -> None:

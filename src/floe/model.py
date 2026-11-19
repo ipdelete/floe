@@ -244,6 +244,8 @@ class Workflow:
                 problems.extend(f"retry policy for {name!r}: {problem}" for problem in policy.problems())
         if tasks is None:
             problems.append("tasks must be a mapping of names to callables")
+        else:
+            problems.extend(_task_problems(tasks))
         inputs = _normalize_inputs(self.inputs, tasks, dag, problems)
         problems += dag_errors
         order: tuple[str, ...] = ()
@@ -287,7 +289,7 @@ def _is_async_task(task: object) -> bool:
     return False
 
 
-def _graph_problems(tasks: dict, dag: dict[str, frozenset[str]]) -> list[str]:
+def _task_problems(tasks: dict) -> list[str]:
     problems = []
     for name, task in tasks.items():
         if not isinstance(name, str) or not name:
@@ -296,6 +298,11 @@ def _graph_problems(tasks: dict, dag: dict[str, frozenset[str]]) -> list[str]:
             problems.append(f"task {name!r} is not callable")
         elif _is_async_task(task):
             problems.append(f"task {name!r} must be synchronous, not async")
+    return problems
+
+
+def _graph_problems(tasks: dict, dag: dict[str, frozenset[str]]) -> list[str]:
+    problems = []
     missing = sorted(map(repr, tasks.keys() - dag.keys()))
     extra = sorted(map(repr, dag.keys() - tasks.keys()))
     if missing:

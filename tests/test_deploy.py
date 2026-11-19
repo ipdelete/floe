@@ -5,6 +5,7 @@ import pytest
 from floe.deploy import (
     Deployment,
     apply,
+    cancel,
     install,
     plan_install,
     start,
@@ -31,6 +32,25 @@ def sd():
     sd = create_autospec(Systemd, instance=True)
     sd.show.return_value = {"LoadState": "not-found", "ActiveState": "inactive", "FragmentPath": ""}
     return sd
+
+
+@pytest.mark.parametrize("owned_file,local_fragment", [(False, True), (True, False), (True, True)])
+def test_cancel_requires_owned_file_and_matching_fragment(tmp_path, sd, monkeypatch, owned_file, local_fragment):
+    store = UnitStore(tmp_path)
+    service = tmp_path / "mydag.service"
+    service.write_text("[X-Floe]\nOwner=floe\n" if owned_file else "[Service]\n")
+    run_id = "a" * 32
+    sd.show.return_value = {"FragmentPath": str(service if local_fragment else tmp_path / "elsewhere" / service.name),
+                            "ActiveState": "activating", "MainPID": "42", "InvocationID": run_id}
+    requests = []
+    monkeypatch.setattr("floe.deploy.request_cancel", lambda *args: requests.append(args))
+    if owned_file and local_fragment:
+        assert cancel("mydag", store, sd, task="fetch") == run_id
+        assert requests == [(run_id, 42, "fetch")]
+    else:
+        with pytest.raises(NotOwnedError):
+            cancel("mydag", store, sd, task="fetch")
+        assert not requests
 
 
 def test_install_then_reinstall_is_idempotent(dep, tmp_path, sd):

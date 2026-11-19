@@ -70,7 +70,7 @@ def test_two_actual_workers_then_exclusive_join(tmp_path):
             assert evidence.returncode == 0 and evidence.error is None, evidence
             # These controlled tasks own no surviving descendants. A real managed
             # supervisor must separately check that before these two commits.
-            results.complete(evidence.task, json.loads(evidence.value))
+            results.commit_encoded(evidence.task, evidence.value)
             schedule.finish(evidence.task, 'succeeded')
             if i == 0:
                 assert schedule.next_task() is None
