@@ -68,7 +68,11 @@ def fetch():
     return 42
 ```
 
-Register `fetch` in `tasks` as usual. The marker does **not** create workers,
+Register `fetch` in `tasks` as usual. The mark belongs to the function, not to
+one dictionary entry: aliases of that function are marked in newly constructed
+workflows. Existing workflows keep their snapshot. To give two registrations
+different eligibility, decorate a separate function that calls the shared helper.
+The marker does **not** create workers,
 change dependencies, or enable cancellation. The current CLI, library runner
 and installed services all still execute one task at a time.
 
