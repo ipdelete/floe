@@ -329,7 +329,7 @@ def cancel(workflow: str, store: UnitStore, sd: Systemd, *, task: str | None = N
         raise ValidationError(['task must be a nonempty string'])
     service, _ = unit_names(workflow)
     props = sd.show(service, 'FragmentPath', 'InvocationID', 'MainPID', 'ActiveState')
-    if not store.owns_path(service, props.get('FragmentPath', '')):
+    if not store.owns_path(service, props.get('FragmentPath', '')) or not store.is_owned(service):
         raise NotOwnedError(f'{service} is not loaded from a Floe-owned file')
     if props.get('ActiveState') not in ('activating', 'active') or not props.get('MainPID', '').isdigit():
         raise NotFoundError(f'no live supervisor for {workflow!r}')

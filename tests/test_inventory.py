@@ -158,10 +158,13 @@ def test_overview_reports_inactive_timer_and_errors_per_workflow(tmp_path, store
             raise SystemdError(["systemctl"], 1, "no session")
         return active_props
 
+    last_run = Run("a" * 32).succeeded_run()
+    history = FakeJournal(last_run.records)
+
     def records(unit, **kwargs):
         if failure == "journal" and unit == "mydag.service":
             raise SystemdError(["journalctl"], 1, "journal unavailable")
-        return iter(())
+        return history.records(unit, **kwargs)
 
     sd.show_all.side_effect = show_timer
     journal = create_autospec(Journal, instance=True)
@@ -172,6 +175,7 @@ def test_overview_reports_inactive_timer_and_errors_per_workflow(tmp_path, store
     assert broken.problems[0] == "units out of date (mydag.timer); reinstall"
     assert ("no session" if failure == "systemd" else "journal unavailable") in broken.problems[1]
     if failure == "systemd":
+        assert broken.last_run.run_id == last_run.id
         assert broken.timer_state is None
         assert broken.to_dict()["timer_state"] is None
     else:

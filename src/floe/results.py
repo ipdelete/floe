@@ -80,6 +80,10 @@ class RunResults:
     def complete(self, name: str, result: object) -> None:
         # Validate before committing either the release or publication.
         encoded = _encode(result, name) if self.remaining[name] else None
+        self.commit_encoded(name, encoded)
+
+    def commit_encoded(self, name: str, encoded: bytes | None) -> None:
+        """Publish already-validated bytes (None means no bound result)."""
         if encoded is not None:
             freed = sum(len(self.values[p]) for p in set(self.inputs.get(name, {}).values())
                         if self.remaining[p] == 1)

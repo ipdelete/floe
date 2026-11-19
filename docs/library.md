@@ -23,7 +23,10 @@ The web UI never loads workflow definitions and has no write routes. See
 [Dashboard](web.md) for its query limits and local-access constraints.
 
 `WorkflowSummary.timer_state` contains the queried timer `UnitState`, or `None`
-when the timer query failed. Its properties preserve the actual activity and
+when the timer query failed. `overview()` queries history independently: a timer
+query failure does not hide the latest run, and a history query failure does not
+hide timer state. Query failures are listed in the workflow's `problems`.
+The timer properties preserve the actual activity and
 unit-file states, including runtime-only enablement; missing properties remain
 unknown. The additive JSON `timer_state` field is that state's `to_dict()` or
 `null`. A populated value has the shape

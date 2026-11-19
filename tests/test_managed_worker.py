@@ -1,7 +1,6 @@
 """Exercise real bootstrap/worker and lifecycle gate; fake only cgroupfs I/O."""
 
 import asyncio
-import json
 from contextlib import contextmanager
 import os
 from pathlib import Path
@@ -112,7 +111,7 @@ def test_exit_and_eof_do_not_release_dependent_while_populated(tmp_path, kernel)
         evidence = await observation
         assert kernel.removed and not kernel.killed
         assert (evidence.value, evidence.returncode, evidence.error) == (b'17', 0, None)
-        results.complete('A', json.loads(evidence.value))
+        results.commit_encoded('A', evidence.value)
         schedule.finish('A', 'succeeded')
         assert schedule.next_task() == 'C' and results.arguments('C') == {'x': 17}
     asyncio.run(drive())

@@ -54,7 +54,7 @@ def test_prerequisite_iterators_are_normalized_once():
     ({"a": noop}, {"a": [set()]}, ["nonempty strings"]),
     ({"a": noop}, {"a": [123, ""]}, ["nonempty strings"]),
     ("tasks", {}, ["tasks must be a mapping"]),
-    ({"a": noop}, [], ["dag must be a mapping"]),
+    ({"a": None}, [], ["dag must be a mapping", "'a' is not callable"]),
 ])
 def test_invalid_graphs(tasks, dag, expected):
     with pytest.raises(ValidationError) as caught:

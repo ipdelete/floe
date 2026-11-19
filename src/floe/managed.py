@@ -166,7 +166,7 @@ async def run_managed(workflow: Workflow, workers: int, on_event: Callable[[Even
                     evidence = worker.result()
                     if evidence.error is None:
                         if name not in cancelling:
-                            results.complete(name, json.loads(evidence.value) if evidence.value is not None else None)
+                            results.commit_encoded(name, evidence.value)
                             status = 'succeeded'
                         else:
                             status = 'cancelled'
