@@ -4,15 +4,15 @@
 
 ## What approving this PR means
 
-Approval accepts the architecture and resolves each [decision requested below](#decisions-requested-from-the-maintainer). Accept the recommended answers or record your alternatives in the PR before merging. Approval does **not** authorize creating the GitHub App or throwaway repo, installing units, changing repository settings, or enabling unattended merges.
+Approval accepts the architecture and resolves each [decision requested below](#decisions-requested-from-the-maintainer). Accept the recommended answers or record your alternatives in the PR before merging. Approval does **not** authorize installing units, changing repository settings, or enabling unattended merges.
 
-**Nothing runs unattended until both the GitHub identity and approval gate and the deployed tick and worker pass validation.** Until then, setup and validation are supervised and separately authorized. Story merges and public closeout also have their own validation gates.
+**Nothing runs unattended until the deployed tick and worker pass validation.** Until then, setup and validation are supervised and separately authorized. Story merges and public closeout also have their own validation gates. By maintainer decision (D-11), agents use the maintainer's own `gh` login; there is no separate GitHub identity.
 
 [Feature #29][feature] · [Design #30][design] · [Decision log](decisions.md)
 
 ## Recommendation
 
-Use a short Floe timer run (a **tick**) to **reconcile** work: check what GitHub says actually happened before deciding what to do next. Run one persistent Pi CLI worker at a time in its own systemd unit. Keep the approved design on protected `master` and use a separate GitHub App identity. Prove the App can merge a checked story but cannot land an unapproved design. Run live end-to-end tests (E2E) one at a time in their dedicated systemd environment. At public closeout, publish an index and a purpose-written summary, not session dialogue.
+Use a short Floe timer run (a **tick**) to **reconcile** work: check what GitHub says actually happened before deciding what to do next. Run one persistent Pi CLI worker at a time in its own systemd unit. Keep the approved design on `master`. Agents work through the maintainer's `gh` login (D-11); the maintainer approves a design by merging its PR, and the loop never merges design PRs itself. Run live end-to-end tests (E2E) one at a time in their dedicated systemd environment. At public closeout, publish an index and a purpose-written summary, not session dialogue.
 
 GitHub keeps state where the maintainer already works. The tick exits instead of paying for a model session to wait. Both runners fixed the same fixture [#31][s31]. Pi-durable can resume from a checkpoint, but it cannot tell whether an interrupted push landed [#32][s32]. Start with the simpler worker; either runner still needs to check external results and control what it publishes.
 
@@ -26,22 +26,21 @@ Normal repo safety rules still apply. Document D-05's standing scope for story E
 
 ## Components
 
-The first slice is local: test one tick against GitHub and launcher stand-ins, then test the launcher with a fixture worker. **That slice needs no App, live timer, production credentials or merge service.** The table shows when each real component is needed.
+The first slice is local: test one tick against GitHub and launcher stand-ins, then test the launcher with a fixture worker. **That slice needs no live timer, production credentials or merge service.** The table shows when each real component is needed.
 
 | Component | What it does | What it holds | When needed |
 | --- | --- | --- | --- |
 | Floe tick | On each timer run, checks GitHub and requests starts for ready work; exits without waiting. | Pinned Floe wheel and protected config; scoped read access and permission to request starts, no model credentials. | First slice as a local command; deployed later. |
-| GitHub issues and branch rules | Hold feature progress and evidence; enforce review and check requirements on `master`. | Issues, PRs, commits and protected design and policy files; maintainer owns settings and design approval. | Stand-in first; real rules before unattended operation. |
+| GitHub issues and PRs | Hold feature progress and evidence. | Issues, PRs and commits. The maintainer approves designs by merging their PRs. | Stand-in first; the real repo for deployment validation. |
 | Launcher | Handles **admission**: decides whether to reserve and start a worker attempt or return the existing run. Owns each worker's lifetime. | A private **ledger**, the durable record of attempt keys, run/unit IDs and outcomes; scoped access to manage its own units. | Fixture in first slice; real units for deployment validation. |
-| Pi worker and private session store | Run one role per attempt and keep the native session; do not grant themselves permissions. | Isolated worktree, scoped tool access and noninteractive model access; private session storage and IDs. No App key or personal credentials. | Fixture worker first; real Pi for deployment validation. |
-| GitHub App and credential issuer | Give automation a distinct identity. The issuer creates narrowly scoped installation tokens. | Issuer keeps the App key; approved operations use short-lived tokens. No worker gets the key. | Later, in an authorized throwaway repo before production. |
-| Merge broker | The trusted code that performs protected GitHub writes and merges only when the required evidence matches. | Scoped App write access, trusted policy and expected PR, revision and commit IDs. | Later, for the identity and merge tests. |
-| Trusted CI and review | Run checks and attach CI and PR-Agent evidence to the exact candidate. | Protected check configuration and credentials separate from candidate code. | Later, for App, story and closeout tests. |
+| Pi worker and private session store | Run one role per attempt and keep the native session; do not grant themselves permissions. | Isolated worktree, scoped tool access and noninteractive model access; private session storage and IDs. Uses the maintainer's `gh` login (D-11); no other personal credentials. | Fixture worker first; real Pi for deployment validation. |
+| Merge broker | The loop's own merge step: merges a story only when the required evidence matches, and never merges a design PR. | The maintainer's `gh` login, trusted policy, and the expected PR, revision and commit IDs. | Later, for story merges. |
+| Trusted CI and review | Run checks and attach CI and PR-Agent evidence to the exact candidate. | Protected check configuration and credentials separate from candidate code. | Later, for story and closeout tests. |
 | Test manager and host | The **test manager** is a dedicated systemd user instance for live E2E on the automation host or VM. Keep it separate from control services and unrelated units. | Isolated test identity and generated test units; no personal or production credentials. | Later, for authorized E2E validation. |
 | E2E lock | Lets only one caller use that test manager, including setup and cleanup. | One lock per manager; block reuse after a crash until cleanup is verified. | Before any automated live story E2E. |
 | Trusted publisher | Checks and releases only the exact closeout artifact that passed policy. | Sealed candidate, pinned scanner and scoped publication access; no raw sessions needed to push. | Later, for the closeout slice. |
 
-The launcher, merge broker and trusted publisher can be roles in **one trusted service**, not three daemons. Its credential issuer can share that process; keep the key out of workers and test jobs. The launcher can also enforce the E2E lock. Keep the tick short-lived and run workers outside its systemd process group. Tests use their own identity and manager, and CI checks publication independently. The diagrams show who does what, not separate services for each role. GitHub writes shown from the tick or agents go through the relevant trusted operation.
+The launcher, merge broker and trusted publisher can be roles in **one trusted service**, not three daemons. The launcher can also enforce the E2E lock. Keep the tick short-lived and run workers outside its systemd process group. Tests use their own identity and manager, and CI checks publication independently. The diagrams show who does what, not separate services for each role. GitHub writes shown from the tick or agents go through the relevant trusted operation.
 
 ## Roles and handoffs
 
@@ -54,9 +53,9 @@ The launcher, merge broker and trusted publisher can be roles in **one trusted s
 | Builder | One issue, worktree, branch and session per attempt. Red → green → refactor; resolve review findings and supply exact-candidate evidence. Report design contradictions instead of deciding them in a story PR. |
 | Archivist | Reconcile the session/artifact index, prepare the closeout artifact privately and submit only policy-approved bytes. Raw capture stays in native harness storage. |
 
-Hand off through artifacts, not shared conversation. A worktree prevents edit collisions; it does not isolate credentials or the host. Use separate OS identities or validated isolation. Keep workers away from the maintainer's home, SSH agent, keyring, Git helpers, manager socket, and CI and issuer credentials.
+Hand off through artifacts, not shared conversation. A worktree prevents edit collisions; it does not isolate credentials or the host. Workers use the maintainer's `gh` login (D-11), so GitHub cannot tell an agent from the maintainer. The rule that only the maintainer approves designs is enforced by the loop's merge step and agent instructions, not by GitHub. **Accepted risk:** a misbehaving agent could merge a PR or change repository settings itself. Keep workers away from the maintainer's SSH agent, keyring, manager socket and any credentials beyond `gh`.
 
-Give each role only the operations it needs. An allowlist that includes unrestricted `bash` is not an access boundary. GitHub's Contents write permission covers both push and merge, so route protected writes through the broker and closeout through the publisher. Treat issue text, code and sessions as input, not permission to expand scope or privileges.
+Give each role only the operations it needs. An allowlist that includes unrestricted `bash` is not an access boundary. Route merges through the merge step and closeout through the publisher. Treat issue text, code and sessions as input, not permission to expand scope or privileges.
 
 ```mermaid
 sequenceDiagram
@@ -104,7 +103,7 @@ sequenceDiagram
 | Feature and phase | The feature issue is the index. Paginate actual parent/sub-issue edges, not checklists or cross-references. Use stable `Spike:`, `Design:` and `Story:` titles for discovery (map the already linked #30–#35 by issue ID); use issue numbers for identity. Sub-issue order is priority, not a dependency. |
 | Active work | Record role, attempt, run ID and session ID on the issue. Link the branch and PR when known. A branch link does not reserve a worker slot, and an issue note only mirrors the ledger. Unknown reads or conflicting candidates block affected work, not the whole tick. |
 | Spike completion | Pinned result commit on the retained spike branch, design-issue handoff and closed spike issue, or an explicit disposition before design. |
-| Design approval | Matching design PR to `master` merged through the gate, matching issue, and canonical ADR at that merge on protected history. Pin the approved revision and resolve its path from trusted configuration; a draft branch, shadow file, symlink, review alone or closed issue is not approval. |
+| Design approval | Matching design PR to `master` merged by the maintainer, matching issue, and canonical ADR at that merge. Pin the approved revision and resolve its path from trusted configuration; a draft branch, shadow file, symlink, review alone or closed issue is not approval. |
 | Story completion | Open, in-scope, unblocked stories are eligible only without active work or a pending design revision. Done means the expected PR merged and the issue closed; record its squash SHA. An early closure or missing auto-close is a discrepancy, not success. When revising, explicitly dispose of superseded stories and invalidate old approval-dependent evidence. |
 | Closeout | All expected stories under the current approved revision are done or explicitly superseded; no unresolved design revision. The expected closeout PR and squash SHA plus feature issue closure establish completion. |
 
@@ -154,28 +153,24 @@ sequenceDiagram
 
 ## Approval and merge gates
 
-**Before the App.** At the time of [#34][s34], `gh` used the maintainer's login and `master` did not require a design review. Don't give workers the personal login. Agents can prepare local changes; a trusted operator can submit a topic branch and hand off PR creation. For #30, the maintainer reviews and merges the exact candidate under their own identity. Record that decision and the merge SHA. If the sole owner authored the PR, don't claim a GitHub approving review: GitHub blocks self-approval. This manual approval does not prove that GitHub enforces the gate.
+**Identity (D-11).** Agents act through the maintainer's `gh` login on the maintainer's repos. GitHub won't record an approving review from a PR's author, so a design is approved when the **maintainer merges its PR**; record the merge SHA in the decision log. The loop's merge step never merges a PR that touches the canonical ADR or decision log, closes a design issue, or is titled `Design:`; it leaves those for the maintainer.
 
-**Production after validation and separate authorization.** Install a dedicated App on only the approved repo. Grant only the needed Contents, PR and Issues permissions, plus read access to checks or statuses if needed. Do not let the App change settings or workflows, publish trusted checks, bypass rules, or use personal `gh` as a fallback. The issuer keeps the App key; the broker limits which operations each role can request.
-
-Require PRs and trusted checks on `master`. Require the maintainer's approval on paths listed in `CODEOWNERS`, dismiss stale approvals, and require zero generic approvals. Allow no bypass, including in inherited or classic rules. Make the maintainer the only effective design owner. Protect the authoritative ADR paths (including this `design.md`), `CODEOWNERS`, and the policy and CI inputs themselves. Protect or move check logic out of ordinary story paths.
-
-A PR that touches any protected design or policy path needs the maintainer's approval even if labeled a story. Verify the actual rules, actors and check source, not a label or bot-authored status. The App can press Merge **after** the owner approves, but cannot supply that approval. Path rules cannot tell whether ordinary story code departs from the design.
+This is a convention enforced by the loop's own code, not by GitHub: an agent using the same login could bypass it. If unattended merging later needs GitHub to enforce the split, revisit with a separate identity (a GitHub App or bot account with `CODEOWNERS` and a no-bypass ruleset), validated in a throwaway repo first [#34][s34].
 
 ```mermaid
 sequenceDiagram
-    participant D as Designer via App
-    participant G as Protected master / GitHub
-    actor M as Maintainer code owner
+    participant D as Designer (maintainer's gh login)
+    participant G as GitHub
+    actor M as Maintainer
     participant T as Tick
     D->>G: Design PR for canonical ADR; Closes design issue
-    Note over G: Missing owner approval blocks merge even with green CI
-    M->>G: Review and approve current candidate
-    opt Candidate changes and approval is invalidated
+    Note over T: The merge step never merges a design PR
+    M->>G: Review; comment or request changes
+    opt Changes requested
         D->>G: Update candidate
-        M->>G: Approve revised candidate after review
+        M->>G: Review the revised candidate
     end
-    D->>G: Request gated squash via trusted broker
+    M->>G: Merge (this is the approval)
     G-->>T: Merged PR, squash SHA and linked issue
     T->>G: Read canonical ADR at merge and verify linkage
     Note over T: Only now eligible for planning against that revision
@@ -183,7 +178,7 @@ sequenceDiagram
 
 **Story gate.** The trusted service records the nondraft PR, its latest commit (head SHA), the target base and tested merge candidate, the ADR revision, test results and PR-Agent review for that head. Builder checks the findings, fixes valid ones and explains the rest. Require CI on the current tested combination, not a prior push. Run live E2E last in an authorized test manager. Record success only after the run finishes and cleans up.
 
-At merge, the broker rechecks the approved revision, pending redesigns, scope, reviews, checks and head/base compatibility. Do not register a design revision and merge a story concurrently. Require up-to-date checks in GitHub and pass the expected head SHA to the squash request. If base, head, scope or evidence changes or is unknown, stop or rerun validation. Test these races before enabling merges. Verify and record the squash SHA; it is not the pre-merge SHA CI tested.
+At merge, the broker rechecks the approved revision, pending redesigns, scope, reviews, checks and head/base compatibility. Do not register a design revision and merge a story concurrently. Check that CI ran on the current head and base, and pass the expected head SHA to the squash request. If base, head, scope or evidence changes or is unknown, stop or rerun validation. Test these races before enabling merges. Verify and record the squash SHA; it is not the pre-merge SHA CI tested.
 
 ```mermaid
 sequenceDiagram
@@ -248,7 +243,7 @@ All recommendations are **Proposed**. Resolve them in the design PR before plann
 | Choice | Options, evidence and agent recommendation |
 | --- | --- |
 | Runner | **Persistent Pi CLI worker per issue attempt** in a separate unit, or a pi-durable server over authenticated HTTP. Both do basic coding [#31][s31]. Durable can recover work and prevent duplicate starts within a conversation. It also adds a host, tool policy and exporter, and still cannot tell whether an external write landed [#32][s32]. Revisit if losing in-progress turns becomes costly. Use native Durable tools if switching. |
-| Approval and identities | **Validate App + protected canonical ADR on `master`**, or an authoritative maintainer-only ref if the split fails or only a human may press Merge. The latter complicates auto-closure and revision pinning. Shared login, same-user token, labels and workflow instructions are not enforcement [#34][s34]. |
+| Approval and identities | **Resolved by the maintainer (D-11):** agents use the maintainer's `gh` login; the maintainer approves a design by merging its PR, and the loop's merge step never merges design PRs. A GitHub App with `CODEOWNERS` and a ruleset remains the option if GitHub-enforced separation is needed later [#34][s34]. |
 | D-07 with D-04 | **Amend D-07 to private sessions plus public index and summary**, keeping D-04. Alternatives: review exact dialogue bytes privately before each release (amend D-04), or accept scanner-only dialogue risk explicitly (not recommended). Raw publication is not recommended under any option [#35][s35]. |
 | E2E serialization | **Require a per-manager lock now** in a dedicated test environment. Sweeping only proven owned fixtures would reduce cleanup risk, but would not prove parallel tests safe. Do both if concurrency warrants it, and keep recovery for stale units. Separate managers could isolate parallel runs later [#33][s33]. |
 | Code location | **Repository-local development tooling outside `src/`** for the first consumer, deployed from a pinned, protected snapshot. Separate reusable repo gives stronger lifecycle separation but adds cross-repo releases and bootstrap. No comparative spike; extract after a second consumer establishes a stable boundary. |
@@ -269,7 +264,7 @@ These are candidate Planner stories, not issues. Start with synthetic/throwaway 
 | --- | --- | --- |
 | 1 | Reconstruct readiness from external evidence. | Fixtures exercise pagination, duplicate candidates, outages, premature closure, shadow/deleted ADR, superseded scope, pending revision and replan. Unknown blocks affected work while an independent item progresses. |
 | 2 | Admit or recover one worker per attempt. | Race starts at the same key; lose accept/writeback replies; kill launcher before/after reservation, spawn and receipt; restart and collect completed units. No second worker or capacity leak. Changed payload, unknown state and wrong-owner cancellation block. Inject uncertain mutations and demonstrate external-state checks, not blind replay. |
-| 3 | Enforce repository approval and identity policy. | **Get authorization to create the App and throwaway repo.** Show an App-authored story squashes without human review and a design squashes only with valid owner approval. Reject stale or wrong-actor reviews, unapproved mixed-path PRs, direct pushes, unapproved ADR rename or policy replacement, and failed, pending or wrong-source checks. Verify App-only identity and narrow role access. Check sub-issue and Development links, trailers and closure after squash and branch deletion, and recovery after a lost merge reply. Get separate authorization for production App installation and repo or ruleset changes. |
+| 3 | Keep design approval with the maintainer. | The loop's merge step refuses fixture PRs that touch the canonical ADR or decision log, close a design issue, or are titled `Design:`, while it merges an eligible story fixture. Sub-issue and Development links, trailers and closure survive squash and branch deletion; a lost merge reply is recovered without a second merge. No App or throwaway repo needed. |
 | 4 | Run the deployed tick and worker independently. | **Explicit authorization required before installing units or modifying the user's systemd session**; prefer an approved disposable manager. Verify timer activation, concurrent manual starts joining the tick, short timeout/local child cleanup, worker survival past tick exit/timeout, restart and cancellation. Verify noninteractive credentials in the real service environment without printing secrets, and continued operation with a broken Builder checkout. |
 | 5 | Gate stories on exact-candidate results and safe live E2E. | Document D-05's standing scope before unattended execution and validate on an authorized disposable test manager. Two callers including the manual entry cannot overlap sweeps; unrelated units aren't touched, and failed cleanup blocks reuse. Exercise stale review, head/base changes during merge, missing PR-Agent, stale E2E and pending redesign; none may merge. Prove a matching checked candidate merges and its distinct squash SHA is recorded. |
 | 6 | Seal and publish only allowed closeout bytes. | Use synthetic sessions/artifacts; test clean, seeded, malformed, oversized, unsupported and scanner-failure cases, candidate swaps and renamed/misplaced files. Verify no public push on holds, trusted hosted check attached to exact candidate, and closeout PR alone closes the feature. If dialogue ever becomes authorized, validate each chosen source format, privacy review policy and both scanner views before real publication. |
@@ -288,7 +283,7 @@ A lock reduces throughput and cannot isolate code. Automated review cannot prove
 | [#31 pinned result][s31] | Both Pi CLI and pi-durable 1.5.2 made the same fixture fix; native Durable tools worked; CLI no-session left no file. | CLI is a reasonable baseline, not proven parity on realistic tasks or authenticated GitHub. Durable retrieval isn't a publishable transcript format. |
 | [#32 pinned result][s32] | Same-key Durable submission deduped across reopen within one conversation. Both pre-body and post-push crashes returned `interrupted`; `safe` replay duplicated a marker. | Separate admission from effects. No live GitHub merge, multi-writer or surviving subprocess proof. |
 | [#33 pinned result][s33] | Wheel tick and exact rendered command worked with a poisoned checkout; forced race needed runner dedupe; stub survived lost reply and tick death. | Pin tick deployment and require durable admission. Installed scheduling, service credentials and cgroup lifecycle remain untested; E2E sweep behavior is source analysis. |
-| [#34 pinned result][s34] | Read-only hierarchy and protection inventory, PR association after branch deletion, explicit trailer preservation in local squash control. | GitHub can be the index; the proposed live App/CODEOWNERS split and closing-link behavior still need write tests. |
+| [#34 pinned result][s34] | Read-only hierarchy and protection inventory, PR association after branch deletion, explicit trailer preservation in local squash control. | GitHub can be the index. The App/`CODEOWNERS` split is deferred by D-11; closing-link behavior still needs a write test. |
 | [#35 pinned result][s35] | Pinned scanner with Bearer rule caught six synthetic secrets in decoded text; serialized JSONL missed one. Local CI step rejected dirty and malformed inputs. No real session was declared safe. | Dual-view gating helps, not a privacy guarantee; hosted CI and Durable normalization remain untested. |
 | [#30 orchestrator review][review] | Reviewed spike scope and handoffs. | Separate worker cgroup is a lifecycle inference from the generated service, not an installed-service result. |
 
