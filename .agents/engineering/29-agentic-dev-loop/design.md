@@ -1,14 +1,14 @@
 # ADR: Agentic development loop
 
-**Status: Proposed — awaiting maintainer approval via the design PR**
+**Status: Accepted — approved by the maintainer in [PR #36](https://github.com/ipdelete/floe/pull/36)**
 
 ## What approving this PR means
 
-Approval accepts the architecture. The maintainer resolved every [open decision](#decisions) during review of this PR (D-11 to D-19 in the [decision log](decisions.md)). Approval does **not** authorize installing units, changing repository settings, or enabling unattended merges.
+Approval accepts the architecture. The maintainer resolved every [open decision](#decisions) during review of this PR (D-11 to D-19 in the [decision log](decisions.md)). Approval does **not** change repository settings or enable unattended merges. The maintainer separately approved installing the loop's units on the current machine (D-20).
 
 **Nothing runs unattended until the deployed tick and worker pass validation.** Until then, setup and validation are supervised and separately authorized. Story merges and public closeout also have their own validation gates. By maintainer decision (D-11), agents use the maintainer's own `gh` login; there is no separate GitHub identity.
 
-**Still needs a separate go-ahead:** installing units on the dedicated host for the first systemd validation (backlog seed 4); updating `AGENTS.md` to record the standing E2E scope (D-05, D-15) and the `gh`-as-maintainer rule (D-11); and a session retention and backup policy, which must be set before the pilot.
+**Settled at approval:** the loop's units may be installed on the current machine for validation and initial operation (D-20); `AGENTS.md` records the standing E2E scope and the `gh`-as-maintainer rule; session retention is undecided and there is no backup policy (D-21).
 
 [Feature #29][feature] · [Design #30][design] · [Decision log](decisions.md)
 
@@ -38,7 +38,7 @@ The first slice is local: test one tick against GitHub and launcher stand-ins, t
 | Pi worker and private session store | Run one role per attempt and keep the native session; do not grant themselves permissions. | Isolated worktree, scoped tool access and noninteractive model access; private session storage and IDs. Uses the maintainer's `gh` login (D-11); no other personal credentials. | Fixture worker first; real Pi for deployment validation. |
 | Merge broker | The loop's own merge step: merges a story only when the required evidence matches, and never merges a design PR. | The maintainer's `gh` login, trusted policy, and the expected PR, revision and commit IDs. | Later, for story merges. |
 | Trusted CI and review | Run checks and attach CI and PR-Agent evidence to the exact candidate. | Protected check configuration and credentials separate from candidate code. | Later, for story and closeout tests. |
-| Test manager and host | The **test manager** is a dedicated systemd user instance for live E2E on the automation host or VM. Keep it separate from control services and unrelated units. | Isolated test identity and generated test units; no personal or production credentials. | Later, for authorized E2E validation. |
+| Test manager and host | The **test manager** is a dedicated systemd user instance for live E2E on the automation host or VM. Keep it separate from control services and unrelated units. | Isolated test identity and generated test units; no personal or production credentials. | Later, for authorized E2E validation. Until it exists, live E2E runs one at a time in the maintainer's user session on the current machine (D-20). |
 | E2E lock | Lets only one caller use that test manager, including setup and cleanup. | One lock per manager; block reuse after a crash until cleanup is verified. | Before any automated live story E2E. |
 | Trusted publisher | Checks and releases only the exact closeout artifact that passed policy. | Sealed candidate, pinned scanner and scoped publication access; no raw sessions needed to push. | Later, for the closeout slice. |
 
@@ -249,7 +249,7 @@ The maintainer accepted the agent recommendations below during review of #36. Ea
 | D-07 with D-04 | **Decided (D-13): amend D-07 to private sessions plus a public index and summary**, keeping D-04. Alternatives: review exact dialogue bytes privately before each release (amend D-04), or accept scanner-only dialogue risk explicitly (not recommended). Raw publication is not recommended under any option [#35][s35]. |
 | E2E serialization | **Decided (D-15): a per-manager lock now**, in a dedicated test systemd manager. Sweeping only proven owned fixtures would reduce cleanup risk, but would not prove parallel tests safe. Do both if concurrency warrants it, and keep recovery for stale units. Separate managers could isolate parallel runs later [#33][s33]. |
 | Code location | **Decided (D-16): repository-local development tooling outside `src/`** for the first consumer, deployed from a pinned, protected snapshot. Separate reusable repo gives stronger lifecycle separation but adds cross-repo releases and bootstrap. No comparative spike; extract after a second consumer establishes a stable boundary. |
-| Machine | **Decided (D-14): one dedicated Linux automation host or VM**, with separate control and test identities/managers, not the maintainer's everyday session. Existing workstation is cheap but couples sessions, credentials and sweeps; split hosts add operations and transport. Confirm target machine, isolation and unattended timer availability; #33 only proved the local wheel path. |
+| Machine | **Decided (D-20, superseding D-14 for now): the current machine.** D-14's recommendation was one dedicated Linux automation host or VM, with separate control and test identities/managers, not the maintainer's everyday session. Existing workstation is cheap but couples sessions, credentials and sweeps; split hosts add operations and transport. Confirm target machine, isolation and unattended timer availability; #33 only proved the local wheel path. |
 | Parallelism | **Decided (D-17): one active worker initially, serial stories**, with explicit prerequisites and a separate E2E lock even at capacity one. Bounded parallel spikes or independent stories later may save time but need race, capacity and rebase evidence; #33 measured a duplicate-admission race, not throughput. |
 | Models by role | **Decided (D-18): pin one model (`github-copilot/gpt-6.2-sol`) for Intake, Spike, Designer, Planner, Builder and any Archivist prose initially**; use no model for the tick, policy checks or merge. Role-specific cheaper models may help after measured quality/cost comparisons. #31 compared runners with one model, not models; the maintainer sets a spend limit before the pilot. |
 | Decision log | **Decided (D-19): keep the file in the feature artifact directory**, preserving #29's table as requirements provenance. Keeping everything on the issue makes later design/decision diffs harder to review; split logs break the feature history. |
