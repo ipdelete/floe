@@ -17,6 +17,7 @@ import subprocess
 import sys
 import uuid
 
+from .cgroups import managed_group
 from .loader import load
 from .model import ValidationError, Workflow
 from .results import MAX_RESULT_BYTES, RunResults, _encode
@@ -132,8 +133,31 @@ async def observe_worker(workflow: Workflow, task: str, results: RunResults, run
     cause TimeoutError after worker exit; do not treat that as a result. The
     nonce correlates evidence, not authentication against trusted user code.
     """
-    if type(timeout) not in (int, float) or not 0 < timeout < math.inf:
-        raise _problem('observation timeout must be finite and positive')
+    _check_timeout(timeout)
+    return await _observe(workflow, task, results, run_id, on_output, timeout, None, None)
+
+
+def _check_timeout(value):
+    if type(value) not in (int, float) or not 0 < value < math.inf:
+        raise _problem('timeouts must be finite and positive')
+
+
+async def observe_managed_worker(workflow: Workflow, task: str, results: RunResults, run_id: str,
+                                 on_output: Callable[[str, bytes], None], *, timeout: float,
+                                 drain_timeout: float, cleanup_timeout: float) -> WorkerEvidence:
+    """Return terminal evidence only after the task group is verified empty and removed.
+
+    On timeout, transport failure or cancellation, discard any staged reply and
+    clean the owned group. A cleanup error is not a successful cancellation.
+    No public launch path; requires an already delegated service cgroup.
+    """
+    for value in (timeout, drain_timeout, cleanup_timeout):
+        _check_timeout(value)
+    async with managed_group(cleanup_timeout) as group:
+        return await _observe(workflow, task, results, run_id, on_output, timeout, group, drain_timeout)
+
+
+async def _observe(workflow, task, results, run_id, on_output, timeout, group, drain_timeout):
     if workflow.source is None or task not in workflow.tasks or workflow.retries:
         raise _problem('requires a file-backed task and does not support retries')
     nonce = uuid.uuid4().bytes
@@ -162,9 +186,21 @@ async def observe_worker(workflow: Workflow, task: str, results: RunResults, run
         output.setblocking(False)
         bootstrap = (f'from floe.worker import _invoke; raise SystemExit('
                      f'_invoke({request.fileno()}, {child_reply.fileno()}))')
-        proc = subprocess.Popen([sys.executable, '-u', '-c', bootstrap], stdin=subprocess.DEVNULL,
+        args = [sys.executable, '-u', '-c', bootstrap]
+        fds = (request.fileno(), child_reply.fileno())
+        if group is not None:
+            join = group.open_control('cgroup.procs', os.O_WRONLY)
+            stack.callback(os.close, join)
+            fds += (join,)
+            # Start isolated without site hooks, then exec the installing Python
+            # normally *inside* the task group. No definition or PYTHONPATH code
+            # in the pre-placement interpreter. Writing 0 migrates the writer.
+            place = (f'import os, sys\nif os.write({join}, b"0") != 1: raise OSError("short cgroup write")\n'
+                     f'os.close({join})\nos.execv(sys.executable, sys.argv[1:])')
+            args = [sys.executable, '-I', '-S', '-c', place, *args]
+        proc = subprocess.Popen(args, stdin=subprocess.DEVNULL,
                                 stdout=child_output, stderr=child_output,
-                                pass_fds=(request.fileno(), child_reply.fileno()),
+                                pass_fds=fds,
                                 env={**os.environ, 'FLOE_RUN_ID': run_id})
         try:
             pidfd = os.pidfd_open(proc.pid)
@@ -178,15 +214,25 @@ async def observe_worker(workflow: Workflow, task: str, results: RunResults, run
                     raise _problem('oversized terminal frame')
                 message.extend(chunk)
 
-            readers = [asyncio.create_task(coro) for coro in (
-                _wait_exit(proc, pidfd), _drain(reply, append), _drain(output, lambda data: on_output(task, data)))]
-            try:
-                async with asyncio.timeout(timeout):
+            async with asyncio.timeout(timeout) as budget:
+                async def exit_gate():
+                    rc = await _wait_exit(proc, pidfd)
+                    if group is not None:
+                        # Shorten, never extend, the run budget. This also bounds
+                        # inherited output writers even if the group is now empty.
+                        end = asyncio.get_running_loop().time() + drain_timeout
+                        budget.reschedule(min(budget.when(), end))
+                        await group.wait_empty()
+                    return rc
+
+                readers = [asyncio.create_task(coro) for coro in (
+                    exit_gate(), _drain(reply, append), _drain(output, lambda data: on_output(task, data)))]
+                try:
                     rc, _, _ = await asyncio.gather(*readers)
-            finally:
-                for reader in readers:
-                    reader.cancel()
-                await asyncio.gather(*readers, return_exceptions=True)
+                finally:
+                    for reader in readers:
+                        reader.cancel()
+                    await asyncio.gather(*readers, return_exceptions=True)
             return _evidence(task, nonce, capture, rc, bytes(message))
         finally:
             if proc.poll() is None:
