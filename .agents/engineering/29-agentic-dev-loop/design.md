@@ -4,9 +4,11 @@
 
 ## What approving this PR means
 
-Approval accepts the architecture and resolves each [decision requested below](#decisions-requested-from-the-maintainer). Accept the recommended answers or record your alternatives in the PR before merging. Approval does **not** authorize installing units, changing repository settings, or enabling unattended merges.
+Approval accepts the architecture. The maintainer resolved every [open decision](#decisions) during review of this PR (D-11 to D-19 in the [decision log](decisions.md)). Approval does **not** authorize installing units, changing repository settings, or enabling unattended merges.
 
 **Nothing runs unattended until the deployed tick and worker pass validation.** Until then, setup and validation are supervised and separately authorized. Story merges and public closeout also have their own validation gates. By maintainer decision (D-11), agents use the maintainer's own `gh` login; there is no separate GitHub identity.
+
+**Still needs a separate go-ahead:** installing units on the dedicated host for the first systemd validation (backlog seed 4); updating `AGENTS.md` to record the standing E2E scope (D-05, D-15) and the `gh`-as-maintainer rule (D-11); and a session retention and backup policy, which must be set before the pilot.
 
 [Feature #29][feature] · [Design #30][design] · [Decision log](decisions.md)
 
@@ -209,9 +211,9 @@ Require the E2E lock for manual and automated runs, from the initial sweep throu
 
 Use persistent `pi --print --session-id … --name …`, not `--no-session`. Keep the session ID and its private storage location. Set access, retention, recovery and deletion policies before rollout. If using Durable, record the storage location and conversation ID, not just the provider session ID. Use a reader for that format on finished snapshots. The harness already captures sessions. Neither `pi --export` HTML nor Durable entry dumps are public artifacts.
 
-**Resolve D-07 before releasing dialogue.** The recommended amendment keeps sessions private, links them by ID, and publishes only a safe index and purpose-written summary. It keeps D-04's single approval. Until the maintainer resolves the conflict, do not publish dialogue. If the maintainer retains dialogue publication, either require a privacy review of the exact bytes before push (a second approval in substance) or explicitly accept scanner-only risk (not recommended). Record any permitted omissions in the index without exposing private details.
+**Sessions stay private (D-13, amending D-07).** Closeout publishes a safe index that links sessions by ID, plus a purpose-written summary; it publishes no dialogue. This keeps D-04's single approval. Reconsidering dialogue publication would need a new decision: either a privacy review of the exact bytes before push (a second approval in substance) or explicit acceptance of scanner-only risk (not recommended). Record any permitted omissions in the index without exposing private details.
 
-If the maintainer approves dialogue, publish only canonical user and assistant text JSONL under `transcripts/`. Omit tool data, thinking, metadata, attachments and context-edited targets. Reject unsupported sources. Redact credential shapes and private paths. Start with a 2 MiB uncompressed budget per feature.
+If dialogue publication is ever approved, publish only canonical user and assistant text JSONL under `transcripts/`. Omit tool data, thinking, metadata, attachments and context-edited targets. Reject unsupported sources. Redact credential shapes and private paths. Start with a 2 MiB uncompressed budget per feature.
 
 Finish the listed sessions before freezing the index. Record the Archivist session ID, finish its work and send the sealed artifact to the publisher without starting another model session. Keep raw session access in private export. For all closeout artifacts, enforce the approved schema, path and redaction rules. Use pinned, checksum-verified Gitleaks with trusted rules including the Bearer control. Scan the exact serialized bytes and, where applicable, the decoded text.
 
@@ -236,21 +238,21 @@ sequenceDiagram
     end
 ```
 
-## Decisions requested from the maintainer
+## Decisions
 
-All recommendations are **Proposed**. Resolve them in the design PR before planning.
+The maintainer accepted the agent recommendations below during review of #36. Each is recorded in the [decision log](decisions.md).
 
-| Choice | Options, evidence and agent recommendation |
+| Choice | Decision, options and evidence |
 | --- | --- |
-| Runner | **Persistent Pi CLI worker per issue attempt** in a separate unit, or a pi-durable server over authenticated HTTP. Both do basic coding [#31][s31]. Durable can recover work and prevent duplicate starts within a conversation. It also adds a host, tool policy and exporter, and still cannot tell whether an external write landed [#32][s32]. Revisit if losing in-progress turns becomes costly. Use native Durable tools if switching. |
+| Runner | **Decided (D-12): persistent Pi CLI worker per issue attempt** in a separate unit, or a pi-durable server over authenticated HTTP. Both do basic coding [#31][s31]. Durable can recover work and prevent duplicate starts within a conversation. It also adds a host, tool policy and exporter, and still cannot tell whether an external write landed [#32][s32]. Revisit if losing in-progress turns becomes costly. Use native Durable tools if switching. |
 | Approval and identities | **Resolved by the maintainer (D-11):** agents use the maintainer's `gh` login; the maintainer approves a design by merging its PR, and the loop's merge step never merges design PRs. A GitHub App with `CODEOWNERS` and a ruleset remains the option if GitHub-enforced separation is needed later [#34][s34]. |
-| D-07 with D-04 | **Amend D-07 to private sessions plus public index and summary**, keeping D-04. Alternatives: review exact dialogue bytes privately before each release (amend D-04), or accept scanner-only dialogue risk explicitly (not recommended). Raw publication is not recommended under any option [#35][s35]. |
-| E2E serialization | **Require a per-manager lock now** in a dedicated test environment. Sweeping only proven owned fixtures would reduce cleanup risk, but would not prove parallel tests safe. Do both if concurrency warrants it, and keep recovery for stale units. Separate managers could isolate parallel runs later [#33][s33]. |
-| Code location | **Repository-local development tooling outside `src/`** for the first consumer, deployed from a pinned, protected snapshot. Separate reusable repo gives stronger lifecycle separation but adds cross-repo releases and bootstrap. No comparative spike; extract after a second consumer establishes a stable boundary. |
-| Machine | **One dedicated Linux automation host or VM**, with separate control and test identities/managers, not the maintainer's everyday session. Existing workstation is cheap but couples sessions, credentials and sweeps; split hosts add operations and transport. Confirm target machine, isolation and unattended timer availability; #33 only proved the local wheel path. |
-| Parallelism | **One active worker initially, serial stories**, with explicit prerequisites and a separate E2E lock even at capacity one. Bounded parallel spikes or independent stories later may save time but need race, capacity and rebase evidence; #33 measured a duplicate-admission race, not throughput. |
-| Models by role | **Pin one capable model for Intake, Spike, Designer, Planner, Builder and any Archivist prose initially**; use no model for the tick, policy checks or merge. Role-specific cheaper models may help after measured quality/cost comparisons. #31 compared runners with one model, not models; maintainer selects the actual model and spend limit. |
-| Decision log | **Start the file in the feature artifact directory in the design PR**, preserving #29's table as requirements provenance. Keeping everything on the issue makes later design/decision diffs harder to review; split logs break the feature history. |
+| D-07 with D-04 | **Decided (D-13): amend D-07 to private sessions plus a public index and summary**, keeping D-04. Alternatives: review exact dialogue bytes privately before each release (amend D-04), or accept scanner-only dialogue risk explicitly (not recommended). Raw publication is not recommended under any option [#35][s35]. |
+| E2E serialization | **Decided (D-15): a per-manager lock now**, in a dedicated test systemd manager. Sweeping only proven owned fixtures would reduce cleanup risk, but would not prove parallel tests safe. Do both if concurrency warrants it, and keep recovery for stale units. Separate managers could isolate parallel runs later [#33][s33]. |
+| Code location | **Decided (D-16): repository-local development tooling outside `src/`** for the first consumer, deployed from a pinned, protected snapshot. Separate reusable repo gives stronger lifecycle separation but adds cross-repo releases and bootstrap. No comparative spike; extract after a second consumer establishes a stable boundary. |
+| Machine | **Decided (D-14): one dedicated Linux automation host or VM**, with separate control and test identities/managers, not the maintainer's everyday session. Existing workstation is cheap but couples sessions, credentials and sweeps; split hosts add operations and transport. Confirm target machine, isolation and unattended timer availability; #33 only proved the local wheel path. |
+| Parallelism | **Decided (D-17): one active worker initially, serial stories**, with explicit prerequisites and a separate E2E lock even at capacity one. Bounded parallel spikes or independent stories later may save time but need race, capacity and rebase evidence; #33 measured a duplicate-admission race, not throughput. |
+| Models by role | **Decided (D-18): pin one model (`github-copilot/gpt-6.2-sol`) for Intake, Spike, Designer, Planner, Builder and any Archivist prose initially**; use no model for the tick, policy checks or merge. Role-specific cheaper models may help after measured quality/cost comparisons. #31 compared runners with one model, not models; the maintainer sets a spend limit before the pilot. |
+| Decision log | **Decided (D-19): keep the file in the feature artifact directory**, preserving #29's table as requirements provenance. Keeping everything on the issue makes later design/decision diffs harder to review; split logs break the feature history. |
 
 ### Alternatives not recommended
 
