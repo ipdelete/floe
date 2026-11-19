@@ -323,6 +323,41 @@ EventKind = Literal["run_started", "task_started", "task_completed", "run_comple
                     "attempt_started", "attempt_completed", "retry_scheduled", "task_output"]
 Status = Literal["succeeded", "failed", "cancelled", "skipped"]
 
+_LIFECYCLE_EVENTS = ("run_started", "task_started", "task_completed", "run_completed")
+_RETRY_EVENTS = ("attempt_started", "attempt_completed", "retry_scheduled")
+_EVENT_KINDS = {
+    1: _LIFECYCLE_EVENTS,
+    2: _LIFECYCLE_EVENTS + _RETRY_EVENTS,
+    3: _LIFECYCLE_EVENTS + ("task_output",),
+}
+_RETRY_FIELDS = ("attempt", "max_attempts", "delay_seconds", "failure_reason")
+
+
+def _valid_event_timestamp(value: str) -> bool:
+    try:
+        timestamp = datetime.fromisoformat(value)
+        if timestamp.utcoffset() is None:
+            return False
+        timestamp.astimezone(UTC)  # also reject offsets that overflow datetime's range
+    except (ValueError, OverflowError):
+        return False
+    return True
+
+
+def _valid_retry_fields(kind: EventKind, schema: int, status: Status | None, *,
+                        attempt: object, max_attempts: object, delay_seconds: object, failure_reason: object) -> bool:
+    if kind in _RETRY_EVENTS:
+        if type(attempt) is not int or type(max_attempts) is not int or not 1 <= attempt <= max_attempts:
+            return False
+        if kind == "retry_scheduled":
+            return failure_reason is None and _valid_delay(delay_seconds) and attempt < max_attempts
+    elif attempt is not None or max_attempts is not None:
+        return False
+    if delay_seconds is not None:
+        return False
+    return failure_reason is None or (schema == 2 and kind == "task_completed" and status == "failed"
+                                     and failure_reason in ("exhausted", "non_retryable"))
+
 
 @dataclass(frozen=True)
 class Event:
@@ -346,40 +381,19 @@ class Event:
     @classmethod
     def from_dict(cls, data: object) -> Event | None:
         """Parse a JSON event, or return None if it isn't one of this schema."""
-        if not isinstance(data, dict) or type(data.get("schema")) is not int or data["schema"] not in (1, 2, 3):
+        if not isinstance(data, dict):
             return None
-        kinds = ("run_started", "task_started", "task_completed", "run_completed")
-        if data["schema"] == 2:
-            kinds += ("attempt_started", "attempt_completed", "retry_scheduled")
-        elif data["schema"] == 3:
-            kinds += ("task_output",)
-        if data.get("event") not in kinds:
+        schema, kind = data.get("schema"), data.get("event")
+        if type(schema) is not int or kind not in _EVENT_KINDS.get(schema, ()):
             return None
         fields = {key: data.get(key) for key in ("workflow", "run_id", "timestamp", "task", "status", "error")}
         if not all(isinstance(fields[key], str) and fields[key] for key in ("workflow", "run_id", "timestamp")):
             return None
         if any(fields[key] is not None and not isinstance(fields[key], str) for key in ("task", "status", "error")):
             return None
-        kind = data["event"]
-        extra = {key: data.get(key) for key in ("attempt", "max_attempts", "delay_seconds", "failure_reason")}
-        if kind.startswith("attempt_") or kind == "retry_scheduled":
-            if (type(extra["attempt"]) is not int or type(extra["max_attempts"]) is not int
-                    or not 1 <= extra["attempt"] <= extra["max_attempts"]):
-                return None
-        elif extra["attempt"] is not None or extra["max_attempts"] is not None:
+        if not _valid_event_timestamp(fields["timestamp"]):
             return None
-        if kind == "retry_scheduled":
-            delay = extra["delay_seconds"]
-            if not _valid_delay(delay) or extra["attempt"] >= extra["max_attempts"]:
-                return None
-        elif extra["delay_seconds"] is not None:
-            return None
-        if extra["failure_reason"] is not None:
-            if (kind != "task_completed" or fields["status"] != "failed"
-                    or extra["failure_reason"] not in ("exhausted", "non_retryable")
-                    or data["schema"] != 2):
-                return None
-        if kind.startswith(("task_", "attempt_")) or kind == "retry_scheduled":
+        if kind.startswith("task_") or kind in _RETRY_EVENTS:
             if not fields["task"]:
                 return None
         elif fields["task"] is not None:
@@ -392,7 +406,7 @@ class Event:
             return None
         if kind.endswith("_completed"):
             statuses = ("succeeded", "failed")
-            if data["schema"] == 3:
+            if schema == 3:
                 statuses += ("cancelled",) if kind == "run_completed" else ("cancelled", "skipped")
             if fields["status"] not in statuses:
                 return None
@@ -400,14 +414,10 @@ class Event:
             return None
         if fields["error"] is not None and fields["status"] != "failed":
             return None
-        try:
-            timestamp = datetime.fromisoformat(fields["timestamp"])
-            if timestamp.utcoffset() is None:
-                return None
-            timestamp.astimezone(UTC)  # also reject offsets that overflow datetime's range
-        except (ValueError, OverflowError):
+        retry_fields = {key: data.get(key) for key in _RETRY_FIELDS}
+        if not _valid_retry_fields(kind, schema, fields["status"], **retry_fields):
             return None
-        return cls(event=kind, schema=data["schema"], message=message, **fields, **extra)
+        return cls(event=kind, schema=schema, message=message, **fields, **retry_fields)
 
     def to_dict(self) -> dict:
         data = {"schema": self.schema, "event": self.event, "workflow": self.workflow,

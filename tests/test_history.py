@@ -219,6 +219,8 @@ def test_since_selects_complete_runs_even_when_their_starts_precede_the_window(s
     {"event": "run_started", "timestamp": "2026-01-01T00:00:00"},
     {"event": "run_completed", "status": "not-a-status"},
     {"event": "task_completed", "task": "fetch"},
+    {"schema": 2, "event": "task_output", "task": "fetch", "message": "line"},
+    {"schema": 3, "event": "attempt_started", "task": "fetch", "attempt": 1, "max_attempts": 2},
 ])
 def test_malformed_events_are_output_not_history_state(sd, fields):
     r = Run("a" * 32).succeeded_run(tasks=("fetch",))

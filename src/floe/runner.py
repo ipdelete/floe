@@ -10,11 +10,13 @@ import os
 import uuid
 from collections.abc import Callable
 from concurrent.futures import CancelledError
+from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import Literal
 
 from tenacity import Retrying, retry_if_exception_type, stop_after_attempt, wait_fixed
 
-from .model import Event, ValidationError, Workflow
+from .model import Event, RetryPolicy, ValidationError, Workflow
 from .results import RunResults
 
 __all__ = ["default_run_id", "run"]
@@ -58,68 +60,80 @@ def _run(workflow: Workflow, on_event: Callable[[Event], object], run_id: str) -
     emit("run_started")
     for name in workflow.order:
         emit("task_started", task=name)
-        policy = workflow.retries.get(name)
-        if policy is None:
-            # Keep the original event sequence for unconfigured tasks.
+        task = workflow.tasks[name]
+        if (policy := workflow.retries.get(name)) is None:
+            failure = _run_once(name, task, results)
+        else:
+            failure = _run_with_retries(name, task, results, policy, emit)
+        if failure is not None:
+            emit("task_completed", task=name, status="failed", error=failure.message, failure_reason=failure.reason)
+            emit("run_completed", status="failed", error=failure.message)
+            return False
+        emit("task_completed", task=name, status="succeeded")
+    emit("run_completed", status="succeeded")
+    return True
+
+
+@dataclass(frozen=True)
+class _TaskFailure:
+    message: str
+    reason: Literal["exhausted", "non_retryable"] | None = None
+
+
+def _run_once(name: str, task: Callable[..., object], results: RunResults) -> _TaskFailure | None:
+    try:
+        result = task(**results.arguments(name))
+        _check_result(result, name)
+        results.complete(name, result)
+    except Exception as exc:
+        return _TaskFailure(str(exc))
+    return None
+
+
+def _run_with_retries(name: str, task: Callable[..., object], results: RunResults,
+                      policy: RetryPolicy, emit: Callable[..., None]) -> _TaskFailure | None:
+    def before_sleep(state):
+        emit("retry_scheduled", task=name, attempt=state.attempt_number,
+             max_attempts=policy.max_attempts, delay_seconds=state.next_action.sleep)
+
+    retrying = Retrying(stop=stop_after_attempt(policy.max_attempts),
+                        wait=wait_fixed(policy.delay_seconds),
+                        retry=retry_if_exception_type(policy.retry_on),
+                        before_sleep=before_sleep, retry_error_callback=lambda state: None)
+    failure = None
+    for attempt in retrying:
+        fields = dict(task=name, attempt=attempt.retry_state.attempt_number, max_attempts=policy.max_attempts)
+        emit("attempt_started", **fields)
+        result = None
+        kwargs = results.arguments(name)
+        # Only the task call belongs inside Tenacity's exception boundary.
+        with attempt:
+            result = task(**kwargs)
+        del kwargs
+        outcome = attempt.retry_state.outcome
+        error = outcome.exception() if outcome.failed else None
+        if error is not None:
+            if not isinstance(error, Exception) or isinstance(error, CancelledError):
+                raise error
+            retryable = isinstance(error, policy.retry_on)
+        else:
             try:
-                result = workflow.tasks[name](**results.arguments(name))
                 _check_result(result, name)
                 results.complete(name, result)
                 del result
             except Exception as exc:
-                emit("task_completed", task=name, status="failed", error=str(exc))
-                emit("run_completed", status="failed", error=str(exc))
-                return False
-        else:
-            def before_sleep(state):
-                emit("retry_scheduled", task=name, attempt=state.attempt_number,
-                     max_attempts=policy.max_attempts, delay_seconds=state.next_action.sleep)
-
-            retrying = Retrying(stop=stop_after_attempt(policy.max_attempts),
-                                wait=wait_fixed(policy.delay_seconds),
-                                retry=retry_if_exception_type(policy.retry_on),
-                                before_sleep=before_sleep, retry_error_callback=lambda state: None)
-            # Tenacity owns counting, waits, and exhaustion. Its context catches
-            # ONLY task-call errors, never callbacks or synchronous validation.
-            error = None
-            reason = "exhausted"
-            for attempt in retrying:
-                number = attempt.retry_state.attempt_number
-                fields = dict(task=name, attempt=number, max_attempts=policy.max_attempts)
-                emit("attempt_started", **fields)
-                result = None
-                kwargs = results.arguments(name)
-                with attempt:
-                    result = workflow.tasks[name](**kwargs)
-                del kwargs
-                outcome = attempt.retry_state.outcome
-                error = outcome.exception() if outcome.failed else None
-                if error is not None and (not isinstance(error, Exception) or isinstance(error, CancelledError)):
-                    raise error
-                if error is None:
-                    try:
-                        _check_result(result, name)
-                        results.complete(name, result)
-                        del result
-                    except Exception as exc:
-                        error = exc
-                        retryable = False
-                    else:
-                        emit("attempt_completed", **fields, status="succeeded")
-                        break
-                else:
-                    retryable = isinstance(error, policy.retry_on)
-                emit("attempt_completed", **fields, status="failed", error=str(error))
-                if not retryable:
-                    reason = "non_retryable"
-                    break
-            if error is not None:
-                emit("task_completed", task=name, status="failed", error=str(error), failure_reason=reason)
-                emit("run_completed", status="failed", error=str(error))
-                return False
-        emit("task_completed", task=name, status="succeeded")
-    emit("run_completed", status="succeeded")
-    return True
+                error = exc
+                retryable = False
+            else:
+                emit("attempt_completed", **fields, status="succeeded")
+                return None
+        failure = _TaskFailure(str(error), "exhausted" if retryable else "non_retryable")
+        emit("attempt_completed", **fields, status="failed", error=failure.message)
+        if not retryable:
+            return failure
+    # A validated policy allows at least one attempt. Reaching here means
+    # Tenacity exhausted the attempts after recording a retryable failure.
+    return failure
 
 
 def _check_result(result: object, name: str) -> None:

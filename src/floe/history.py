@@ -9,12 +9,12 @@ are not in the journal and therefore not in history.
 import json
 import re
 from collections.abc import Iterable, Iterator
-from dataclasses import replace
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 
 from .deploy import unit_names
 from .journal import Journal
-from .model import AttemptRun, Event, LogLine, NotFoundError, Run, RunLogs, TaskRun, ValidationError
+from .model import AttemptRun, Event, LogLine, NotFoundError, Run, RunLogs, RunStatus, TaskRun, ValidationError
 from .systemd import Systemd
 
 __all__ = ["get_run", "list_runs", "run_logs"]
@@ -201,35 +201,56 @@ def _event_time(event: Event) -> datetime:
     return datetime.fromisoformat(event.timestamp).astimezone(UTC)
 
 
+@dataclass
+class _RunEvidence:
+    started: datetime | None = None
+    completed: tuple[Event, datetime] | None = None
+    terminal_time: datetime | None = None
+    systemd_result: str | None = None
+    systemd_failed: bool = False
+    output: list[str] = field(default_factory=list)
+
+
+def _resolve_run_status(evidence: _RunEvidence, *, running: bool,
+                        has_tasks: bool) -> tuple[RunStatus, datetime | None, str | None]:
+    if evidence.completed is not None:
+        event, finished = evidence.completed
+        return event.status or "failed", finished, event.error
+    if running and evidence.terminal_time is None:
+        return "running", None, None
+    result = evidence.systemd_result
+    if evidence.started is not None:
+        error = "run ended without completing" + (f" (systemd result: {result})" if result else "")
+        return "incomplete", evidence.terminal_time, error
+    if evidence.terminal_time is not None and evidence.systemd_failed and not has_tasks:
+        return "failed", evidence.terminal_time, _error_output(evidence.output, result)
+    return "incomplete", evidence.terminal_time, "no completion recorded"
+
+
 def _build_run(workflow: str, invocation: str, records: list[dict], running: bool, *,
                max_records: int | None = None) -> Run:
     truncated = max_records is not None and len(records) > max_records
     if truncated:
         records = records[-max_records:]
     tasks: dict[str, TaskRun] = {}
-    started: datetime | None = None
-    completed: tuple[Event, datetime] | None = None
-    output: list[str] = []
-    terminal_time: datetime | None = None
-    result: str | None = None
-    failed = False
+    evidence = _RunEvidence()
     for record in records:
         if _from_systemd(record):
             if record.get("MESSAGE_ID") in _TERMINAL:
-                terminal_time = _time(record)
-            result = record.get("UNIT_RESULT") or result
+                evidence.terminal_time = _time(record)
+            evidence.systemd_result = record.get("UNIT_RESULT") or evidence.systemd_result
             if (record.get("MESSAGE_ID") in (_JOB_FAILED, _UNIT_FAILED)
                     or record.get("JOB_RESULT") == "failed"
                     or record.get("UNIT_RESULT") not in (None, "", "success")):
-                failed = True
+                evidence.systemd_failed = True
             continue
         event = _event(record, workflow, invocation)
         if event is None:
-            output.append(_message(record))
+            evidence.output.append(_message(record))
             continue
         when = _event_time(event)
         if event.event == "run_started":
-            started = when
+            evidence.started = when
         elif event.event == "task_started" and event.task:
             tasks[event.task] = TaskRun(event.task, "running", started=when)
         elif event.event == "task_completed" and event.task:
@@ -253,30 +274,19 @@ def _build_run(workflow: str, invocation: str, records: list[dict], running: boo
             tasks[event.task] = replace(task, attempts=tuple(attempts[n] for n in sorted(attempts)),
                                         max_attempts=event.max_attempts, retry_at=retry_at)
         elif event.event == "run_completed":
-            completed = (event, when)
+            evidence.completed = (event, when)
 
     first = _time(records[0]) if records else None
-    if completed:
-        event, finished = completed
-        status, error = event.status or "failed", event.error
-    elif running and terminal_time is None:
-        status, finished, error = "running", None, None
-    elif started:
-        status, finished = "incomplete", terminal_time
-        error = "run ended without completing" + (f" (systemd result: {result})" if result else "")
-    elif terminal_time is not None and failed and not tasks:
-        status, finished, error = "failed", terminal_time, _error_output(output, result)
-    else:
-        status, finished, error = "incomplete", terminal_time, "no completion recorded"
+    status, finished, error = _resolve_run_status(evidence, running=running, has_tasks=bool(tasks))
     if status != "running":
         for name, task in tasks.items():
             tasks[name] = replace(task, status="incomplete" if task.status == "running" else task.status,
                                   retry_at=None,
                                   attempts=tuple(replace(a, status="incomplete") if a.status == "running"
                                                  else a for a in task.attempts))
-    return Run(workflow=workflow, run_id=invocation, status=status, started=started or (None if truncated else first),
-               finished=finished, error=error, tasks=tuple(tasks.values()),
-               result=result, truncated=truncated)
+    return Run(workflow=workflow, run_id=invocation, status=status,
+               started=evidence.started or (None if truncated else first), finished=finished,
+               error=error, tasks=tuple(tasks.values()), result=evidence.systemd_result, truncated=truncated)
 
 
 def _error_output(output: list[str], result: str | None) -> str | None:

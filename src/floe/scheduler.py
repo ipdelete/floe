@@ -77,6 +77,10 @@ class TaskSchedule:
             return task
         return None
 
+    def cancellation_requested(self, task: str) -> bool:
+        """Whether an active task has an accepted stop request, not proof it stopped."""
+        return task in self._stopping
+
     def cancel_task(self, task: str) -> bool:
         """True only for a newly accepted request on an active task."""
         if task not in self._active or task in self._stopping:
