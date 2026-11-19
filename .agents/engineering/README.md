@@ -57,7 +57,15 @@ three methods or require a design to justify a predetermined implementation.
 
 ## Artifacts and decisions
 
-Use a directory per engineering effort when durable artifacts are useful, e.g. `docs/engineering/connection-pooling/` with `spike.md` and/or `design.md`.
+Keep product usage, API, deployment and compatibility documentation in `docs/`.
+The [development guide](../development.md) and engineering work records live under
+`.agents/`, alongside the skills and templates that guide the work.
+
+Use `.agents/engineering/<effort>/` for useful findings, designs and decisions,
+with an entry point when several records are needed. Put disposable prototype
+code in `.agents/engineering/<effort>/experiments/` on spike branches only.
+Documentation/design PRs carry the evidence and reproduction details, including
+pinned experiment commits, rather than merging those implementations.
 
 Record decision-relevant evidence, failed approaches, constraints, assumptions, architectural decisions, invariants, and meaningful implementation discoveries. Separate what was observed from what was inferred. Prefer updating an existing document over creating another one.
 
@@ -76,9 +84,10 @@ Installed from [ipdelete/agentic-engineering-method](https://github.com/ipdelete
 at commit `28897512f5d49f69eb3b9961daba0dfd7f924944`:
 
 - `.agents/skills/{spike,design,implement}/SKILL.md` — upstream skills with an
-  added clarification for resolving repository-root-relative artifact paths;
-  the spike skill also links Floe's branch/handoff workflow and allows a stopping
-  criterion instead of a mandatory timebox.
+  added clarification for resolving repository-root-relative artifact paths and
+  Floe's `.agents/engineering/` artifact location; the spike skill also links the
+  branch/handoff workflow and allows a stopping criterion instead of a mandatory
+  timebox.
 - `.agents/templates/{spike,design,decisions}.md` — unchanged upstream starters.
 - This README and the engineering-method section of `AGENTS.md` are adapted to
   Floe; the existing architecture, safety, testing, and PR instructions are retained.

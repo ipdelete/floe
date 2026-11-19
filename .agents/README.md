@@ -8,8 +8,10 @@ Run `/reload` in an existing session to pick up additions.
 - `/skill:writing-for-agents` uses Matt Pocock's reference for agent-facing
   documents. It is also model-discoverable when writing skills or editing
   `AGENTS.md` or `CLAUDE.md`.
-- See [Engineering knowledge](../docs/engineering/README.md) for the installed
-  Spike, Design, and Implement methods and templates.
+- See [Engineering knowledge](engineering/README.md) for the Spike, Design, and
+  Implement methods, artifact layout, and branch/evidence handoff workflow.
+- See [Development](development.md) for local validation, CI, and opt-in
+  real-systemd tests.
 
 ## Writing for Agents: source and updates
 

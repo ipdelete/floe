@@ -94,15 +94,17 @@ what is known, remaining uncertainty, risk, and the cost of being wrong:
 
 Skills are in `.agents/skills/`; optional starters are in `.agents/templates/`.
 Keep durable artifacts proportional to the effort under
-`docs/engineering/<effort>/`, with an entry point and links when several documents
-are needed. Keep current conclusions clear and significant history explicit.
+`.agents/engineering/<effort>/`, with an entry point and links when several
+records are needed. Disposable code belongs in that effort's `experiments/`
+directory on spike branches only; `docs/` describes the product. Keep current
+conclusions clear and significant history explicit.
 For consequential choices, maintain an effort-local `decisions.md`: record the
 choice, alternatives, rationale, evidence, uncertainty, status, and who approved
 it when the choice is made. Reconcile decisions and stale references at session
 end; label reconstructed rationale or unknowns honestly. Small routine changes
 need no decision log or separate implementation report.
 
-See [Engineering knowledge](docs/engineering/README.md) for spike branches and
+See [Engineering knowledge](.agents/engineering/README.md) for spike branches and
 evidence handoff. Merge-bound work follows the PR workflow below; disposable
 experiments use validation appropriate to the question. Safety rules apply to both.
 
@@ -113,7 +115,7 @@ experiments use validation appropriate to the question. Safety rules apply to bo
    `spike/...` branch before making changes; never push changes directly to `master`.
 2. Choose the appropriate path:
    - **Disposable spike:** follow the
-     [spike branch workflow](docs/engineering/README.md#spike-branches-and-handoff)
+     [spike branch workflow](.agents/engineering/README.md#spike-branches-and-handoff)
      and stop this checklist here; a PR is optional and not intended for merge.
    - **Merge-bound work:** keep the PR coherent; consequential designs need human
      approval before implementation. Add appropriate tests and documentation, run

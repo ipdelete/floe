@@ -15,4 +15,4 @@ When findings change, update affected explanations and links so current understa
 
 ## Decision record
 
-When a consequential engineering choice arises, record it contemporaneously in `docs/engineering/<effort>/decisions.md` using `.agents/templates/decisions.md`; distinguish agent recommendations from engineer-approved decisions. At session end, reconcile meaningful decisions against the work and evidence, explicitly labeling any retrospective reconstruction. Skip trivial choices.
+When a consequential engineering choice arises, record it contemporaneously in `.agents/engineering/<effort>/decisions.md` using `.agents/templates/decisions.md`; distinguish agent recommendations from engineer-approved decisions. At session end, reconcile meaningful decisions against the work and evidence, explicitly labeling any retrospective reconstruction. Skip trivial choices.
