@@ -328,6 +328,12 @@ def test_invalid_retry_wait_is_not_history_evidence(delay):
     assert floe.Event.from_dict(event.to_dict()) is None
 
 
+def test_retry_cannot_be_scheduled_after_the_last_attempt():
+    event = floe.Event("retry_scheduled", "mydag", "a" * 32, datetime.now().astimezone().isoformat(),
+                       task="fetch", attempt=3, max_attempts=3, delay_seconds=1)
+    assert history(Records("a" * 32).output(json.dumps(event.to_dict())).records).lines[0].kind == "output"
+
+
 @pytest.mark.parametrize("reason", ["exhausted", "non_retryable"])
 def test_history_preserves_final_failure_reason(reason):
     r = retry_records()

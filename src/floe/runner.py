@@ -110,7 +110,8 @@ def _run_with_retries(name: str, task: Callable[..., object], results: RunResult
         with attempt:
             result = task(**kwargs)
         del kwargs
-        error = attempt.retry_state.outcome.exception()
+        outcome = attempt.retry_state.outcome
+        error = outcome.exception() if outcome.failed else None
         if error is not None:
             if not isinstance(error, Exception) or isinstance(error, CancelledError):
                 raise error
