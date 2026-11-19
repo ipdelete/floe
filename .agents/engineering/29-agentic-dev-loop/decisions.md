@@ -1,6 +1,6 @@
 # Decisions: agentic development loop
 
-[Feature #29][feature] · [Design #30][design] · [Proposed ADR](design.md). This log spans requirements, spikes, design and implementation. Only the requirements rows are recorded decisions. The proposals do not supersede them unless the maintainer approves the change and the design PR records it. Add the PR link once opened; record the approving actor, revision and merge SHA after approval.
+[Feature #29][feature] · [Design #30][design] · [Proposed ADR](design.md). This log spans requirements, spikes, design and implementation. Only the requirements rows are recorded decisions. The proposals do not supersede them unless the maintainer approves the change and the design PR records it. Design PR: [#36](https://github.com/ipdelete/floe/pull/36). Record the approving actor, revision and merge SHA here after approval.
 
 ## Requirements — transcribed from #29
 
@@ -47,11 +47,12 @@ Grouped by spike; the pinned results retain the full rationale and limitations. 
 | A-08 | Admit one worker initially and serialize stories. Revisit with measured throughput and concurrency safety; keep the manager lock independently. | Design | Agent recommendation | Proposed | [#30][design] / A | [#29 open questions][questions], [#33][s33] |
 | A-09 | Start with one pinned capable model for reasoning/prose roles and none for orchestration or policy gates. Maintainer chooses model and budget; role-specific models need comparisons. | Design | Agent recommendation | Proposed | [#30][design] / A | [#29 open questions][questions], [#31][s31]; no model-quality comparison |
 | A-10 | Put the feature-wide decision log next to the ADR and retain the issue decision table as provenance. Record later approvals and changes with sessions and PRs. | Design | Agent recommendation | Proposed | [#30][design] / A | [#29 open questions][questions], [engineering knowledge](../README.md#artifacts-and-decisions) |
+| A-11 | Bootstrap exception: the maintainer's merge of design PR #36 under their own login is the design approval. GitHub can't record a self-approving review and doesn't yet enforce the gate (no App, CODEOWNERS or ruleset), so this approval is a recorded manual decision, not a server-enforced one. Later design revisions use the validated App gate. | Design | Agent recommendation | Proposed — maintainer accepts by merging #36 | [#30][design], [#36](https://github.com/ipdelete/floe/pull/36) / A | [#34][s34]; PR-Agent review of #36 |
 
 ## Session reconciliation
 
-- **Session:** A. Reviewed D-01–D-10 against #29; transcribed the spike recommendations as S-31–S-35 and recorded A-01–A-10 during design. No rationale attributed to the maintainer beyond what #29 records.
-- **Open approvals:** A-01–A-10 and specifically the D-07 amendment. Design approval does not grant GitHub App/repo or user-manager setup permission and does not establish that the validation gates passed.
+- **Session:** A. Reviewed D-01–D-10 against #29; transcribed the spike recommendations as S-31–S-35 and recorded A-01–A-11 during design. No rationale attributed to the maintainer beyond what #29 records.
+- **Open approvals:** A-01–A-11 and specifically the D-07 amendment. Design approval does not grant GitHub App/repo or user-manager setup permission and does not establish that the validation gates passed.
 - **Implementation:** No implementation decisions yet. Preserve previous rows when accepting or superseding a decision and link the new record to the old one.
 
 [feature]: https://github.com/ipdelete/floe/issues/29
