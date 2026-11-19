@@ -15,6 +15,7 @@ from datetime import UTC, datetime
 from tenacity import Retrying, retry_if_exception_type, stop_after_attempt, wait_fixed
 
 from .model import Event, ValidationError, Workflow
+from .results import RunResults
 
 __all__ = ["default_run_id", "run"]
 
@@ -53,6 +54,7 @@ def _run(workflow: Workflow, on_event: Callable[[Event], object], run_id: str) -
                        timestamp=datetime.now(UTC).isoformat(),
                        schema=2 if workflow.retries else 1, **fields))
 
+    results = RunResults(workflow.inputs)
     emit("run_started")
     for name in workflow.order:
         emit("task_started", task=name)
@@ -60,7 +62,10 @@ def _run(workflow: Workflow, on_event: Callable[[Event], object], run_id: str) -
         if policy is None:
             # Keep the original event sequence for unconfigured tasks.
             try:
-                _check_result(workflow.tasks[name](), name)
+                result = workflow.tasks[name](**results.arguments(name))
+                _check_result(result, name)
+                results.complete(name, result)
+                del result
             except Exception as exc:
                 emit("task_completed", task=name, status="failed", error=str(exc))
                 emit("run_completed", status="failed", error=str(exc))
@@ -83,8 +88,10 @@ def _run(workflow: Workflow, on_event: Callable[[Event], object], run_id: str) -
                 fields = dict(task=name, attempt=number, max_attempts=policy.max_attempts)
                 emit("attempt_started", **fields)
                 result = None
+                kwargs = results.arguments(name)
                 with attempt:
-                    result = workflow.tasks[name]()
+                    result = workflow.tasks[name](**kwargs)
+                del kwargs
                 outcome = attempt.retry_state.outcome
                 error = outcome.exception() if outcome.failed else None
                 if error is not None and (not isinstance(error, Exception) or isinstance(error, CancelledError)):
@@ -92,6 +99,8 @@ def _run(workflow: Workflow, on_event: Callable[[Event], object], run_id: str) -
                 if error is None:
                     try:
                         _check_result(result, name)
+                        results.complete(name, result)
+                        del result
                     except Exception as exc:
                         error = exc
                         retryable = False
