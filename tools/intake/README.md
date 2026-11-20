@@ -13,8 +13,12 @@ values into the environment before launching (don't put secrets in the repo):
 
 - `INTAKE_TOKEN`: a random bearer token, at least 32 characters.
 - `GITHUB_TOKEN`: a token scoped to `ipdelete/floe` with Issues read/write.
-- `OPENAI_API_KEY` and `INTAKE_MODEL`: an OpenAI API key and an OpenAI model ID
-  supported by the installed Pi model catalog and your account.
+
+Intake reuses the local Pi login and cached model catalog. It inherits
+`PI_PROVIDER` and `PI_MODEL` when started from Pi, otherwise it defaults to
+`github-copilot` / `gpt-6.2-sol`. Set `INTAKE_MODEL` to override the model ID.
+If the model is unavailable, check `/login` and `/model` in Pi before starting
+Intake. The issue-writing `GITHUB_TOKEN` is separate from the model login.
 
 ```sh
 cd tools/intake
