@@ -61,6 +61,11 @@ def test_invalid_dispositions_do_not_count(kwargs, message):
         check(persistent(), disposition(**kwargs))
 
 
+def test_mixed_disposition_body_is_ignored_with_format_hint():
+    with pytest.raises(review.ReviewBlocked, match='abc.*dedicated comment'):
+        check(persistent(), disposition('Notes from review:\n- abc: fixed — repaired'))
+
+
 def test_all_active_findings_must_be_accounted_for():
     current = persistent(findings=(('abc', 'ACTIVE'), ('def', 'ACTIVE')))
     with pytest.raises(review.ReviewBlocked, match='def'):
@@ -88,6 +93,7 @@ def test_a_same_head_comment_update_invalidates_earlier_disposition_and_run_id()
     (lambda: (comment('<!-- pr-agent-review-state:v1\nnot json\n-->'),), 'malformed'),
     (lambda: (comment('<!-- pr-agent-review-state:v1\n{"schema_version":1,"schema_version":1}\n-->'),), 'malformed'),
     (lambda: (comment('<!-- pr-agent-review-state:v2\n{}\n-->'),), 'malformed'),
+    (lambda: (replace(persistent(), body=persistent().body.replace('Possible issue', '--!>')),), 'malformed'),
     (lambda: (comment('## PR Reviewer Guide 🔍\n\n<!-- pr-agent:review:full -->'),), 'malformed'),
     (lambda: (persistent(), comment('<!-- pr-agent-review-state:v1\n{', id=3,
                                     created=T + timedelta(seconds=4))), 'malformed'),

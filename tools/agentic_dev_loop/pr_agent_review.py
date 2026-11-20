@@ -88,7 +88,9 @@ def _no_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
 def _persistent(comment: Comment) -> _PersistentRun:
     malformed = ReviewBlocked('malformed PR-Agent persistent review state')
     match = _STATE.search(comment.body)
-    if match is None or comment.body.count(_STATE_NAMESPACE) != 1:
+    # The producer escapes literal HTML comment closers in the payload.
+    if (match is None or comment.body.count(_STATE_NAMESPACE) != 1
+            or '-->' in match[1] or '--!>' in match[1]):
         raise malformed
     try:
         state = json.loads(match[1], object_pairs_hook=_no_duplicate_keys)
@@ -213,7 +215,9 @@ def require_review(evidence: ReviewEvidence | None, pr: IssueRef, head_sha: str,
             covered.update(_dispositions(comment.body))
     missing = sorted(active - covered)
     if missing:
-        raise ReviewBlocked('PR-Agent findings lack a later loop disposition: ' + ', '.join(missing))
+        raise ReviewBlocked(f'PR-Agent findings lack a later loop disposition: {", ".join(missing)}; '
+                            'use a dedicated comment with only "- <id>: fixed — <note>" or '
+                            '"- <id>: not applicable — <reason>" lines')
     # PR-Agent's run_id can be the commit URL, reused across reruns on the same
     # head. Bind E2E to the observed comment version(s) and normalized findings.
     active_ids = tuple(sorted(active))
