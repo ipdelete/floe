@@ -210,6 +210,8 @@ class Decision:
 
     ``merge_stories`` excludes draft PRs, stories with unmet prerequisites,
     active work, and superseded scope, even if an expected PR already exists.
+    ``closeout_ready`` is a backlog result, independent of whether an Archivist
+    can be admitted again. It does not attest to any session's completion.
     """
 
     approval: ApprovedDesign | None = None
@@ -217,6 +219,7 @@ class Decision:
     blockers: tuple[Blocker, ...] = ()
     completed_stories: tuple[StoryCompletion, ...] = ()
     merge_stories: tuple[StoryMergeCandidate, ...] = ()
+    closeout_ready: bool = False
 
     @property
     def merge_candidates(self) -> tuple[int, ...]:
@@ -460,14 +463,17 @@ def _decide_stories(
         elif work is None:
             work = Work(Role.BUILDER, issue, approval)
 
+    closeout_ready = False
     if completed.keys() == set(backlog.expected):
         if type(evidence.closeout_active) is not bool:
             blockers.append(Blocker(feature.number, Reason.UNKNOWN_EVIDENCE))
-        elif evidence.closeout_active:
-            blockers.append(Blocker(feature.number, Reason.ACTIVE_WORK))
         else:
-            work = Work(Role.ARCHIVIST, feature.number, approval)
-    return Decision(approval, work, tuple(blockers), tuple(completed.values()), tuple(merge_stories))
+            closeout_ready = True
+            if evidence.closeout_active:
+                blockers.append(Blocker(feature.number, Reason.ACTIVE_WORK))
+            else:
+                work = Work(Role.ARCHIVIST, feature.number, approval)
+    return Decision(approval, work, tuple(blockers), tuple(completed.values()), tuple(merge_stories), closeout_ready)
 
 
 def _revision_blockers(
