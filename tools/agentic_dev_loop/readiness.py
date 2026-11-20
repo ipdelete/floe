@@ -199,10 +199,16 @@ class StoryCompletion:
 
 
 @dataclass(frozen=True)
+class StoryMergeCandidate:
+    issue: int
+    pr: int
+
+
+@dataclass(frozen=True)
 class Decision:
     """Scope results, not authorization to start or merge.
 
-    ``merge_candidates`` excludes draft PRs, stories with unmet prerequisites,
+    ``merge_stories`` excludes draft PRs, stories with unmet prerequisites,
     active work, and superseded scope, even if an expected PR already exists.
     """
 
@@ -210,7 +216,11 @@ class Decision:
     work: Work | None = None
     blockers: tuple[Blocker, ...] = ()
     completed_stories: tuple[StoryCompletion, ...] = ()
-    merge_candidates: tuple[int, ...] = ()
+    merge_stories: tuple[StoryMergeCandidate, ...] = ()
+
+    @property
+    def merge_candidates(self) -> tuple[int, ...]:
+        return tuple(candidate.pr for candidate in self.merge_stories)
 
 
 def _issue_number(value: object) -> bool:
@@ -429,7 +439,7 @@ def _decide_stories(
         return Decision(approval=approval, blockers=tuple(blockers))
 
     work = None
-    merge_candidates = []
+    merge_stories = []
     blockers.extend(Blocker(issue, Reason.SUPERSEDED) for issue in backlog.superseded if issue not in ordered)
     for issue in ordered:
         if issue in backlog.superseded:
@@ -446,7 +456,7 @@ def _decide_stories(
         elif issue in candidates:
             blockers.append(Blocker(issue, Reason.EXISTING_PR, (candidates[issue].number,)))
             if candidates[issue].state is PullRequestState.OPEN:
-                merge_candidates.append(candidates[issue].number)
+                merge_stories.append(StoryMergeCandidate(issue, candidates[issue].number))
         elif work is None:
             work = Work(Role.BUILDER, issue, approval)
 
@@ -457,7 +467,7 @@ def _decide_stories(
             blockers.append(Blocker(feature.number, Reason.ACTIVE_WORK))
         else:
             work = Work(Role.ARCHIVIST, feature.number, approval)
-    return Decision(approval, work, tuple(blockers), tuple(completed.values()), tuple(merge_candidates))
+    return Decision(approval, work, tuple(blockers), tuple(completed.values()), tuple(merge_stories))
 
 
 def _revision_blockers(

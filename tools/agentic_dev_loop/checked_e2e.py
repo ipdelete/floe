@@ -31,7 +31,7 @@ class Binding:
     adr_revision: str
 
 
-def _valid_binding(binding: object) -> bool:
+def valid_binding(binding: object) -> bool:
     return (isinstance(binding, Binding) and valid_issue_ref(binding.pr)
             and all(valid_sha(sha) for sha in (binding.head_sha, binding.base_sha,
                                                binding.merge_sha, binding.adr_revision)))
@@ -85,12 +85,18 @@ class FixtureAttestation:
 
     def matches(self, expected: Binding) -> bool:
         """Compare fixture identities only; this does not authorize a story merge."""
-        return _valid_binding(expected) and self.binding == expected
+        return valid_binding(expected) and self.binding == expected
 
 
-def _passed(check: object, binding: Binding, producer: str) -> bool:
+def check_passed(check: object, binding: Binding, producer: str) -> bool:
     return (isinstance(check, Check) and check.binding == binding and check.producer == producer
             and isinstance(check.run_id, str) and bool(check.run_id.strip()) and check.status == 'success')
+
+
+def review_passed(review: object, binding: Binding, producer: str) -> bool:
+    return (isinstance(review, Review) and check_passed(review.check, binding, producer)
+            and isinstance(review.findings, tuple)
+            and all(isinstance(item, Disposition) for item in review.findings))
 
 
 def _eligible(fixture: Fixture, read: Callable[[IssueRef], Evidence | None]) -> Evidence:
@@ -101,12 +107,9 @@ def _eligible(fixture: Fixture, read: Callable[[IssueRef], Evidence | None]) -> 
     if (not isinstance(evidence, Evidence) or evidence.binding != fixture.binding
             or evidence.open_nondraft is not True or evidence.redesign_pending is not False):
         raise live_e2e.Blocked('candidate is unknown, ineligible or blocked by redesign')
-    if not _passed(evidence.ci, fixture.binding, fixture.ci_producer):
+    if not check_passed(evidence.ci, fixture.binding, fixture.ci_producer):
         raise live_e2e.Blocked('no matching trusted CI success')
-    review = evidence.review
-    if (not isinstance(review, Review) or not _passed(review.check, fixture.binding, fixture.review_producer)
-            or not isinstance(review.findings, tuple)
-            or not all(isinstance(item, Disposition) for item in review.findings)):
+    if not review_passed(evidence.review, fixture.binding, fixture.review_producer):
         raise live_e2e.Blocked('no matching trusted PR-Agent success with all findings resolved')
     return evidence
 
@@ -206,7 +209,7 @@ def validate_fixture(
     protected from candidate writes. This is not a same-UID isolation boundary.
     Policy holds raise Blocked; local filesystem failures can raise OSError.
     """
-    if (not _valid_binding(fixture.binding)
+    if (not valid_binding(fixture.binding)
             or not all(path.is_absolute() for path in (fixture.repo, fixture.checkout, fixture.python, receipt))
             or not all(isinstance(p, str) and p.strip() for p in (fixture.ci_producer, fixture.review_producer))
             or fixture.ci_producer == fixture.review_producer):

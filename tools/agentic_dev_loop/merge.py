@@ -1,4 +1,4 @@
-"""Trusted design-PR refusal over fixture evidence, with no live squash adapter."""
+"""Trusted design-PR classification over normalized fixture evidence."""
 
 import re
 from collections.abc import Callable, Hashable
@@ -52,7 +52,7 @@ class Page[T]:
     next_cursor: str | None
 
 
-class MergeTransport(Protocol):
+class CandidateReader(Protocol):
     """Fresh normalized facts; raise EvidenceReadError if completeness cannot be verified.
 
     Pages must be bound to the supplied candidate, not stamped with an assumed
@@ -68,26 +68,14 @@ class MergeTransport(Protocol):
 
     def closing_issues(self, candidate: Candidate, cursor: str | None) -> Page[ClosingIssue]: ...
 
-    def squash(self, candidate: Candidate) -> None:
-        """Request a squash only with a server-enforced expected head SHA.
 
-        The transport must use ``candidate.head_sha`` as a merge precondition,
-        not as a separate read before an unconditional request. This does not
-        make changes to PR metadata atomic with the squash.
-        """
-        ...
-
-
-class MergeOutcome(StrEnum):
+class Refusal(StrEnum):
     DESIGN_PR = "design-pr"
     UNKNOWN_EVIDENCE = "unknown-evidence"
-    STORY_GATES_BLOCKED = "story-gates-blocked"
-    CANDIDATE_CHANGED = "candidate-changed"
-    SQUASH_REQUESTED = "squash-requested"
 
 
 @dataclass(frozen=True)
-class _ClassifiedStory:
+class ClassifiedStory:
     candidate: Candidate
     paths: frozenset[ChangedPath]
     links: frozenset[ClosingIssue]
@@ -166,60 +154,34 @@ def _read_pages[T](
         seen_cursors.add(cursor)
 
 
-def _classify(
-    pr: IssueRef, policy: DesignProtection, transport: MergeTransport,
-) -> _ClassifiedStory | MergeOutcome:
-    try:
-        candidate = transport.candidate(pr)
-        if (not isinstance(candidate, Candidate) or candidate.pr != pr
-                or not valid_issue_ref(candidate.pr) or not _nonempty_text(candidate.title)):
-            return MergeOutcome.UNKNOWN_EVIDENCE
-        if candidate.title.startswith("Design:"):
-            return MergeOutcome.DESIGN_PR
-        if (not _nonempty_text(candidate.author) or not _nonempty_text(candidate.base)
-                or not _sha(candidate.base_sha) or not _sha(candidate.head_sha)):
-            return MergeOutcome.UNKNOWN_EVIDENCE
-
-        paths = _read_pages(candidate, transport.changed_paths, _path_keys)
-        if any(policy.adr_path in (path.path, path.previous_path) for path in paths):
-            return MergeOutcome.DESIGN_PR
-
-        links = _read_pages(candidate, transport.closing_issues, _link_keys)
-        known_designs = {_issue_key(issue) for issue in policy.design_issues}
-        if any(link.title.startswith("Design:") or _issue_key(link.issue) in known_designs for link in links):
-            return MergeOutcome.DESIGN_PR
-    except (EvidenceReadError, OSError):
-        return MergeOutcome.UNKNOWN_EVIDENCE
-    return _ClassifiedStory(candidate, paths, links)
-
-
-def attempt_story_squash(
-    pr: IssueRef,
-    policy: DesignProtection,
-    transport: MergeTransport,
-    story_gates: Callable[[Candidate], bool],
-) -> MergeOutcome:
-    """Classify, call the separate story gates, then reclassify before requesting squash.
-
-    Classification does not authorize a merge, and a squash request is not a
-    verified result. There is no live transport, retry, or post-merge check here.
-    """
+def classify(
+    pr: IssueRef, policy: DesignProtection, transport: CandidateReader,
+) -> ClassifiedStory | Refusal:
     if not valid_issue_ref(pr):
         raise ValueError("a repository-qualified PR number is required")
     if (not isinstance(policy, DesignProtection) or not _repo_path(policy.adr_path)
             or not isinstance(policy.design_issues, frozenset)
             or not all(valid_issue_ref(issue) for issue in policy.design_issues)):
         raise ValueError("the canonical ADR path and known design identities are required")
+    try:
+        candidate = transport.candidate(pr)
+        if (not isinstance(candidate, Candidate) or candidate.pr != pr
+                or not valid_issue_ref(candidate.pr) or not _nonempty_text(candidate.title)):
+            return Refusal.UNKNOWN_EVIDENCE
+        if candidate.title.startswith("Design:"):
+            return Refusal.DESIGN_PR
+        if (not _nonempty_text(candidate.author) or not _nonempty_text(candidate.base)
+                or not _sha(candidate.base_sha) or not _sha(candidate.head_sha)):
+            return Refusal.UNKNOWN_EVIDENCE
 
-    first = _classify(pr, policy, transport)
-    if isinstance(first, MergeOutcome):
-        return first
-    if story_gates(first.candidate) is not True:
-        return MergeOutcome.STORY_GATES_BLOCKED
-    fresh = _classify(pr, policy, transport)
-    if isinstance(fresh, MergeOutcome):
-        return fresh
-    if first != fresh:
-        return MergeOutcome.CANDIDATE_CHANGED
-    transport.squash(fresh.candidate)
-    return MergeOutcome.SQUASH_REQUESTED
+        paths = _read_pages(candidate, transport.changed_paths, _path_keys)
+        if any(policy.adr_path in (path.path, path.previous_path) for path in paths):
+            return Refusal.DESIGN_PR
+
+        links = _read_pages(candidate, transport.closing_issues, _link_keys)
+        known_designs = {_issue_key(issue) for issue in policy.design_issues}
+        if any(link.title.startswith("Design:") or _issue_key(link.issue) in known_designs for link in links):
+            return Refusal.DESIGN_PR
+    except (EvidenceReadError, OSError):
+        return Refusal.UNKNOWN_EVIDENCE
+    return ClassifiedStory(candidate, paths, links)
