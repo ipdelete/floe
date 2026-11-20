@@ -59,6 +59,17 @@ uv run python examples/deploy_demo.py  # validates/plans; no writes or manager c
 git diff --check
 ```
 
+Write tests from the outside in:
+
+1. Start from a user claim and write one live e2e test for it.
+2. Trace the path that test takes and write contract tests for the seams it
+   crosses, with real components on both sides.
+3. For each component behind a contract, write unit tests for its logic.
+   Fake only external boundaries, copying the shapes they really produce.
+
+What a layer teaches you can change the others. A new claim starts a new
+pass.
+
 ## Documentation expectations
 
 Keep the README, docs/, examples, help text, and public contracts aligned.

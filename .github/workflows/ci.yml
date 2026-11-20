@@ -23,7 +23,45 @@ defaults:
     shell: bash
 
 jobs:
+  # Runs for every change. Markdown-only changes stop here: `check` is then
+  # skipped, which a required status check counts as passing.
+  changes:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    outputs:
+      code: ${{ steps.changes.outputs.code }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Check committed whitespace
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          if [[ -n "$BASE_SHA" && ! "$BASE_SHA" =~ ^0+$ ]]; then
+            git diff --check "$BASE_SHA" HEAD
+          else
+            git show --format= --check HEAD
+          fi
+      - name: Look for changes other than Markdown
+        id: changes
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          RELEASE_TAG: ${{ inputs.release-tag }}
+        run: |
+          if [[ -n "$RELEASE_TAG" || -z "$BASE_SHA" || "$BASE_SHA" =~ ^0+$ ]]; then
+            code=true
+          elif git diff --name-only "$BASE_SHA" HEAD | grep -qv '\.md$'; then
+            code=true
+          else
+            code=false
+          fi
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+
   check:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-26.04
     timeout-minutes: 15
     outputs:
@@ -54,15 +92,6 @@ jobs:
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           test "$(git rev-parse --verify "refs/tags/$RELEASE_TAG^{commit}")" = "$GITHUB_SHA"
           git merge-base --is-ancestor "$GITHUB_SHA" origin/master
-      - name: Check committed whitespace
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
-        run: |
-          if [[ -n "$BASE_SHA" && ! "$BASE_SHA" =~ ^0+$ ]]; then
-            git diff --check "$BASE_SHA" HEAD
-          else
-            git show --format= --check HEAD
-          fi
       - run: uv sync --locked
       - name: Test
         run: uv run --locked pytest -q
