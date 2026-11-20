@@ -127,32 +127,53 @@ again on the squash message. Keep the issue → PR → squash link and the spike
 commit pin independently of topic branch links. Fixtures exercise these routes
 with local Git refs; hosted closure and deployment are not tested here.
 
-## Design PR refusal fixture
+## Checked story squash fixture
 
 ```sh
-uv run pytest -q tests/agentic_dev_loop/test_merge.py
+uv run pytest -q tests/agentic_dev_loop/{test_merge,test_story_merge}.py
 ```
 
-`attempt_story_squash()` is the fixture's trusted merge entry point, separate
-from the tick. Supply the canonical ADR path and any known design issue
-identities (including legacy #30 for feature #29) from trusted configuration,
-not from the PR. A `Design:` title, an actual closing link to a design issue,
-or a change to the canonical ADR blocks squash. This includes deletions and
-both sides of renames. The decision log is an ordinary file (D-23); updating it
-does not make a story PR a design PR. Paths are exact, case-sensitive repository
-paths in the Git diff, not filenames resolved in a checkout. `Design:` is the
-same literal title prefix used for feature discovery. Neither the author's
-identity nor a request for an exception changes this policy.
+`story_merge.MergeBroker` is the fixture's only squash entry point, separate
+from the tick. Configure the canonical ADR path and known design issue IDs
+(including legacy #30 for feature #29) in trusted policy. A `Design:` title,
+actual closing link to a design issue, or change to the canonical ADR (including
+deletions and both sides of renames) blocks squash, regardless of author. Diff
+paths are exact and case-sensitive. The decision log is not the ADR (D-23).
+Classification requires complete, candidate-bound pages with verified counts
+and exhaustion, not a list possibly cut short at an endpoint cap.
 
-The fixture checks every page of both evidence sources before accepting a PR as
-non-design. The transport must attest to candidate identity, complete counts,
-and exhaustion, or fail the read. The broker reclassifies after the separate
-story-gate check; fresh unknown evidence or a changed classification snapshot
-blocks squash. Tests stub the story gates and record only the fake squash
-request, not a merge result. There is no live adapter, no GitHub enforcement,
-and no proof that mutable PR metadata can be checked atomically with a real
-squash request. The fixture imposes no restriction on the maintainer acting
-outside the loop.
+The broker checks current readiness for the exact story and PR, the approved
+ADR revision, the `master` base and head, nondraft status, clear reviews and
+complete PR-Agent findings disposition. CI, PR-Agent and E2E must come from
+separately configured trusted producers for the same base/head/tested merge SHA
+and revision. E2E must attest to the same CI and PR-Agent runs and verified
+cleanup; the supervised desktop fixture receipt is not accepted. The broker
+reads the gates and classification again before claiming the write. A
+conditional transport must enforce the expected facts *at* the squash, not
+just reread them before sending a request. In particular, a head-only lease
+does not guard base movement. No live transport is provided; unattended GitHub
+merge stays disabled. Tests do not prove GitHub's base/metadata conditions,
+branch protection or hosted auto-close.
+
+Use the protected `initialize_writer()` journal and the same writer lock for
+cooperating callers. A loop redesign must first call `register_redesign()`;
+`REGISTERED` means a durable merge hold exists for that feature and revision,
+not that the remote request was published. Do not publish a stale request for
+an obsolete revision. A competing call gets `BUSY`, and an unresolved squash
+blocks the feature's redesign registration. External actors aren't locked out.
+Old fixture writer journals without the merge tables cannot authorize merges;
+do not delete or recreate a journal with pending operations to unblock them.
+
+The broker claims the squash before sending once with explicit `Refs:` trailers
+for the feature and story. It reconciles by stable PR and issue number, even
+if the topic branch is deleted. Completion requires an independently read
+squash SHA distinct from the tested SHA, the expected base parent and message,
+and an issue closure attributed to that PR. Premature closure, a wrong commit
+or missing auto-close is a discrepancy. An unresolved reply never authorizes
+another send, even if the PR still looks open. Only a definite rejection at
+the write boundary clears the claim for fresh validation. Keep the same request
+and journal on recovery; a verified receipt records the historical effect,
+not current issue state.
 
 ## Installed fixture lifetime gate
 

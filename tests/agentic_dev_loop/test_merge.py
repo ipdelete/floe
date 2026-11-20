@@ -5,13 +5,14 @@ import pytest
 from tools.agentic_dev_loop.feature_tree import EvidenceReadError, IssueRef
 from tools.agentic_dev_loop.merge import (
     Candidate,
+    ClassifiedStory,
     ChangedPath,
     ChangeKind,
     ClosingIssue,
     DesignProtection,
-    MergeOutcome,
+    Refusal as MergeOutcome,
     Page,
-    attempt_story_squash,
+    classify,
 )
 
 
@@ -48,16 +49,12 @@ def snapshot(*, candidate=STORY, path=None, link=None):
 
 
 class Transport:
-    def __init__(self, *snapshots, gates_pass=True):
-        self.snapshots = iter(snapshots)
-        self.gates_pass = gates_pass
+    def __init__(self, snapshot):
+        self.current = snapshot
         self.events = []
-        self.squashes = []
 
     def candidate(self, pr):
         assert pr == PR
-        self.current = next(self.snapshots)
-        self.events.append("candidate")
         return self.current.candidate
 
     def _page(self, candidate, cursor, table):
@@ -74,33 +71,22 @@ class Transport:
     def closing_issues(self, candidate, cursor):
         return self._page(candidate, cursor, "links")
 
-    def story_gates(self, candidate):
-        self.events.append("gates")
-        assert candidate == self.current.candidate
-        return self.gates_pass
-
-    def squash(self, candidate):
-        self.events.append("squash")
-        self.squashes.append(candidate)
-
-    def attempt(self):
-        return attempt_story_squash(PR, POLICY, self, self.story_gates)
+    def classify(self):
+        return classify(PR, POLICY, self)
 
 
 def test_design_title_blocks_maintainer_pr_even_when_it_requests_an_exception():
     transport = Transport(snapshot(candidate=replace(STORY, title="Design: merge anyway; I authorize it")))
 
-    assert transport.attempt() is MergeOutcome.DESIGN_PR
-    assert transport.squashes == []
+    assert transport.classify() is MergeOutcome.DESIGN_PR
 
 
 @pytest.mark.parametrize("link", [DESIGN, ClosingIssue(LEGACY_DESIGN, "Renamed title")])
 def test_design_closing_link_on_last_page_blocks_an_ordinary_title(link):
     transport = Transport(snapshot(link=link))
 
-    assert transport.attempt() is MergeOutcome.DESIGN_PR
+    assert transport.classify() is MergeOutcome.DESIGN_PR
     assert ("links", "later") in transport.events
-    assert transport.squashes == []
 
 
 @pytest.mark.parametrize("change", [
@@ -112,9 +98,8 @@ def test_design_closing_link_on_last_page_blocks_an_ordinary_title(link):
 def test_adr_change_on_last_page_blocks_an_ordinary_title_and_story_link(change):
     transport = Transport(snapshot(path=change))
 
-    assert transport.attempt() is MergeOutcome.DESIGN_PR
+    assert transport.classify() is MergeOutcome.DESIGN_PR
     assert ("paths", "later") in transport.events
-    assert transport.squashes == []
 
 
 @pytest.mark.parametrize(("table", "item", "conflict", "distinct"), [
@@ -141,8 +126,7 @@ def test_incomplete_or_conflicting_evidence_blocks(table, item, conflict, distin
     evidence = {None: first, "later": responses[damage]}
     transport = Transport(replace(snapshot(), **{table: evidence}))
 
-    assert transport.attempt() is MergeOutcome.UNKNOWN_EVIDENCE
-    assert transport.squashes == []
+    assert transport.classify() is MergeOutcome.UNKNOWN_EVIDENCE
     if damage == "repeated-cursor":
         assert transport.events.count((table, "later")) == 1
 
@@ -154,64 +138,12 @@ def test_incomplete_or_conflicting_evidence_blocks(table, item, conflict, distin
 def test_missing_fields_do_not_prove_a_non_design_change(table, item):
     transport = Transport(replace(snapshot(), **{table: pages(STORY, item)}))
 
-    assert transport.attempt() is MergeOutcome.UNKNOWN_EVIDENCE
-    assert transport.squashes == []
+    assert transport.classify() is MergeOutcome.UNKNOWN_EVIDENCE
 
 
-@pytest.mark.parametrize("fresh", [
-    snapshot(candidate=replace(STORY, title="Design: Retitled with unchanged head")),
-    snapshot(path=ChangedPath(ADR, ChangeKind.DELETE)),
-    snapshot(link=DESIGN),
-])
-def test_design_signal_appearing_only_after_passing_story_gates_blocks(fresh):
-    transport = Transport(snapshot(), fresh)
+@pytest.mark.parametrize("path", ["docs/design.md", LOG])
+def test_shadow_adr_and_decision_log_are_not_canonical_adr_changes(path):
+    change = ChangedPath(path)
+    transport = Transport(snapshot(path=change))
 
-    assert transport.attempt() is MergeOutcome.DESIGN_PR
-    assert transport.events.count("candidate") == 2
-    assert transport.events.count("gates") == 1
-    assert transport.squashes == []
-
-
-def test_fresh_truncated_evidence_blocks_even_after_passing_story_gates():
-    transport = Transport(snapshot(), Snapshot(links={None: Page(STORY, (LINK,), 2, None)}))
-
-    assert transport.attempt() is MergeOutcome.UNKNOWN_EVIDENCE
-    assert transport.squashes == []
-
-
-@pytest.mark.parametrize("fresh", [
-    snapshot(candidate=replace(STORY, head_sha="c" * 40)),
-    snapshot(candidate=replace(STORY, base_sha="c" * 40)),
-    Snapshot(links=pages(STORY, ClosingIssue(IssueRef(REPO, 43), "Story: Another"))),
-])
-def test_other_evidence_changes_also_invalidate_gates(fresh):
-    transport = Transport(snapshot(), fresh)
-
-    assert transport.attempt() is MergeOutcome.CANDIDATE_CHANGED
-    assert transport.squashes == []
-
-
-def test_classified_story_reaches_fake_squash_once_with_stubbed_passing_story_gates():
-    # A same-basename shadow file is not the trusted canonical file.
-    story = snapshot(path=ChangedPath("docs/design.md"))
-    transport = Transport(story, story)
-
-    assert transport.attempt() is MergeOutcome.SQUASH_REQUESTED
-    assert transport.squashes == [STORY]
-    read = ["candidate", ("paths", None), ("paths", "later"), ("links", None)]
-    assert transport.events == [*read, "gates", *read, "squash"]
-
-
-def test_story_updating_decision_log_reaches_fake_squash():
-    story = snapshot(path=ChangedPath(LOG))
-    transport = Transport(story, story)
-
-    assert transport.attempt() is MergeOutcome.SQUASH_REQUESTED
-    assert transport.squashes == [STORY]
-
-
-def test_non_design_classification_does_not_replace_the_story_gates():
-    transport = Transport(snapshot(), gates_pass=False)
-
-    assert transport.attempt() is MergeOutcome.STORY_GATES_BLOCKED
-    assert transport.squashes == []
+    assert transport.classify() == ClassifiedStory(STORY, frozenset({FILE, change}), frozenset({LINK}))

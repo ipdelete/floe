@@ -9,7 +9,7 @@ import hashlib
 import json
 import re
 import sqlite3
-from contextlib import closing
+from contextlib import closing, contextmanager
 from dataclasses import asdict, dataclass
 from enum import StrEnum
 from math import isfinite
@@ -355,9 +355,34 @@ def initialize_writer(directory: Path) -> None:
             ) STRICT;
             CREATE INDEX writes_target ON writes(target);
             CREATE TABLE terminal_run (target TEXT PRIMARY KEY, fingerprint TEXT NOT NULL) STRICT;
+            CREATE TABLE story_squashes (
+                repo TEXT NOT NULL, pr INTEGER NOT NULL, feature INTEGER NOT NULL,
+                fingerprint TEXT NOT NULL, message TEXT NOT NULL, observed_sha TEXT,
+                verified INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (repo, pr)
+            ) STRICT;
+            CREATE TABLE redesign_holds (
+                repo TEXT NOT NULL, feature INTEGER NOT NULL, revision TEXT NOT NULL,
+                PRIMARY KEY (repo, feature, revision)
+            ) STRICT;
             COMMIT;
         """)
     (directory / "writer.lock").touch(mode=0o600, exist_ok=False)
+
+
+class WriterBusy(Exception):
+    """The journal is currently locked by a cooperating writer."""
+
+
+@contextmanager
+def _locked_writer(directory: Path):
+    # Keep one lock across durable commits and calls to external transports.
+    with (directory / "writer.lock").open("rb") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise WriterBusy from exc
+        with closing(_open(directory, mode="rw")) as conn:
+            yield conn
 
 
 class Writer:
@@ -378,15 +403,10 @@ class Writer:
         target = json.dumps((operation.repo_id, *_target(operation)))
         fingerprint = _digest([type(operation.change).__name__, asdict(operation)])
         try:
-            # Keep the writer lock across both durable commits and remote calls.
-            # In particular, another process can't see a claim and send before us.
-            with (self._directory / "writer.lock").open("rb") as lock:
-                try:
-                    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                except BlockingIOError:
-                    return Result(Outcome.BUSY)
-                with closing(_open(self._directory, mode="rw")) as conn:
-                    return self._reconcile(conn, operation, target, fingerprint, deadline)
+            with _locked_writer(self._directory) as conn:
+                return self._reconcile(conn, operation, target, fingerprint, deadline)
+        except WriterBusy:
+            return Result(Outcome.BUSY)
         except (OSError, sqlite3.Error):
             return Result(Outcome.UNKNOWN)
 
