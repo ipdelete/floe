@@ -223,7 +223,8 @@ and its generated body closes just the feature. Both writes use durable claims
 under the shared writer lock. After an interrupted reply, reopen the same
 journal and supply the same handoff and target. The publisher must observe the
 exact ref or expected PR before advancing. An empty or conflicting read does
-not authorize another send; preserve the journal for reconciliation. This
+not authorize another send, even after a timeout. If the result stays
+unresolved, surface the status to the maintainer and preserve the journal. This
 fixture does not overwrite existing closeout files, rebase or replace a
 published candidate, or repair unexpected remote state.
 
@@ -237,9 +238,9 @@ python3.14 -E -s -B -m tools.agentic_dev_loop.hosted_closeout \
   --scanner /path/to/pinned/gitleaks
 ```
 
-Provision a protected Git SHA-1 object store with valid, complete objects for
-these trusted event identities, fixed local config and normal Git intake
-validation and resource limits. The checker inspects only Git objects, not a
+Provision `/usr/bin/git` and a protected Git SHA-1 object store with valid,
+complete objects for these trusted event identities, fixed local config,
+normal Git intake validation and resource limits. The checker inspects only Git objects, not a
 checkout. It checks the complete diff from the sole parent, requires exactly
 the two non-executable regular-file additions, and runs its own pinned policy
 on those bytes. It exits 1 with a safe status on refusal; success emits only
@@ -254,7 +255,7 @@ and the same completed backlog with no redesign hold. The conditional squash
 transport must enforce those facts at the write boundary, not just do a client
 reread before a head-only merge. The broker journals the claim and verifies the
 actual squash SHA, sole parent, delta, `Refs: #<feature>` trailer and feature
-closure attributed to that PR. It never directly closes the issue. It can
+closure attributed to that exact merge of the PR. It never directly closes the issue. It can
 reconcile a delayed closure or lost merge reply by PR and issue number without
 the topic ref. Unexpected merge or closure and unresolved sends remain
 blocked; do not clear a claim on that basis.

@@ -13,7 +13,7 @@ from tools.agentic_dev_loop.hosted_closeout import Commit
 from tools.agentic_dev_loop.readiness import Backlog, DesignEvidence, IssueState, PullRequestState, RevisionRequest
 from tools.agentic_dev_loop.story_merge import MergeBroker, MergePolicy, Outcome as StoryOutcome
 
-BASE, HEAD, SQUASH = 'b' * 40, 'a' * 40, 'c' * 40
+BASE, HEAD, SQUASH = 'e' * 40, 'a' * 40, 'c' * 40
 PR = IssueRef(FEATURE.repo, 88)
 OTHER = IssueRef(FEATURE.repo, 89)
 SOURCE = 'fixture/protected-closeout@trusted-revision'
@@ -27,7 +27,7 @@ class Remote:
         self.calls = []
         self.lose = None
         self.land = True
-        self.closed_by = None
+        self.closure = None
         self.squash_commit = None
         self.check = None
         self.accepted_sha = SQUASH
@@ -62,7 +62,7 @@ class Remote:
 
     def merge_state(self, receipt):
         return release.MergeState(self.prs[0], self.current_base, self.feature, self.check,
-                                  self.closed_by, self.squash_commit)
+                                  self.closure, self.squash_commit)
 
     def conditional_squash(self, command):
         self.calls.append(('squash', command))
@@ -79,7 +79,8 @@ class Remote:
 
     def close_feature(self, closer):
         self.feature = replace(self.feature, state=IssueState.CLOSED)
-        self.closed_by = closer
+        sha = self.squash_commit.commit.head_sha if self.squash_commit else BASE
+        self.closure = release.Closure(closer, sha)
 
 
 @pytest.fixture
@@ -275,13 +276,34 @@ def test_verify_exact_squash_trailer_and_auto_close_with_or_without_reply(setup,
     result = reopen().merge(receipt)
     assert result == release.Result(release.Outcome.VERIFIED, squash_sha=SQUASH)
     assert remote.squash_commit.message.endswith(f'\n\nRefs: #{FEATURE.number}')
-    assert remote.closed_by == PR
+    assert remote.closure == release.Closure(PR, SQUASH)
     assert reopen().merge(receipt) == result
     assert [call[0] for call in remote.calls] == ['push', 'pr', 'squash']
 
 
+def test_failed_read_after_squash_is_unknown_and_only_retries_verification(setup):
+    reopen, remote, receipt = published(setup)
+    send, read = remote.conditional_squash, remote.merge_state
+
+    def unknown(*args):
+        raise OSError('synthetic read outage')
+
+    def lose_read(command):
+        reported = send(command)
+        remote.merge_state = unknown
+        return reported
+
+    remote.conditional_squash = lose_read
+    assert reopen().merge(receipt).outcome is release.Outcome.UNKNOWN
+    assert reopen().merge(receipt).outcome is release.Outcome.UNKNOWN
+    remote.merge_state = read
+    assert reopen().merge(receipt).squash_sha == SQUASH
+    assert [call[0] for call in remote.calls] == ['push', 'pr', 'squash']
+
+
 @pytest.mark.parametrize('problem', ['closed-early', 'merged-early', 'wrong-sha', 'wrong-trailer',
-                                     'wrong-parent', 'wrong-delta', 'other-closer', 'no-auto-close', 'ambiguous'])
+                                     'wrong-parent', 'wrong-delta', 'other-closer', 'earlier-closure',
+                                     'no-auto-close', 'ambiguous'])
 def test_discrepancies_never_establish_completion_or_resend(setup, problem):
     reopen, remote, receipt = published(setup)
     send = remote.conditional_squash
@@ -296,9 +318,11 @@ def test_discrepancies_never_establish_completion_or_resend(setup, problem):
             remote.squash_commit = replace(commit, commit=replace(commit.commit, **{field: '0' * 40}))
         elif problem == 'other-closer':
             remote.close_feature(OTHER)
+        elif problem == 'earlier-closure':
+            remote.closure = replace(remote.closure, squash_sha=BASE)
         elif problem == 'no-auto-close':
             remote.feature = replace(remote.feature, state=IssueState.OPEN)
-            remote.closed_by = None
+            remote.closure = None
         return reply
 
     if problem == 'closed-early':
@@ -322,6 +346,7 @@ def test_discrepancies_never_establish_completion_or_resend(setup, problem):
     if problem == 'ambiguous':
         (call,) = sends
         command = call[1]
+        remote.ref = None  # verification must work after deletion of the topic branch
         remote.prs = (replace(remote.prs[0], state=PullRequestState.MERGED),)
         remote.squash_commit = release.Squash(replace(receipt.publication.commit, head_sha=SQUASH), command.message)
         remote.close_feature(PR)

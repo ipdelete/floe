@@ -89,12 +89,18 @@ class Squash:
 
 
 @dataclass(frozen=True, slots=True)
+class Closure:
+    pr: IssueRef
+    squash_sha: str  # closure from this exact merge, not a prior event or closing intent
+
+
+@dataclass(frozen=True, slots=True)
 class MergeState:
     pull: Pull
     base_sha: str  # current master, not the parent recorded in the PR's commit
     feature: FeatureEvidence
     check: HostedCheck | None
-    closed_by: IssueRef | None = None  # actual issue closure event and its PR
+    closure: Closure | None = None
     squash: Squash | None = None
 
 
@@ -112,7 +118,8 @@ class Transport(Protocol):
     every observation to the actual same-repository identities. Publication
     reads cover the full branch-pair PR inventory, including closed PRs. Merge
     reads by PR and feature number, independent of the topic ref, and verify
-    actual closing links, squash association, commit and issue closure event.
+    actual closing links, squash association and commit. Bind the actual issue
+    closure event to the merge after verifying its ordering and attribution.
     Authenticate hosted results from protected policy, not candidate output.
     """
 
@@ -385,7 +392,7 @@ class Publisher:
         if not isinstance(state, MergeState) or not isinstance(state.feature, FeatureEvidence):
             return Result(Outcome.UNKNOWN)
         if (not _matches_pull(state.pull, publication, PullRequestState.OPEN) or state.pull.pr != receipt.pr
-                or state.feature.state is not IssueState.OPEN or state.closed_by is not None or state.squash is not None):
+                or state.feature.state is not IssueState.OPEN or state.closure is not None or state.squash is not None):
             return Result(Outcome.DISCREPANCY)
         scope = _scope(publication.target, self._policy, state.feature)
         check = state.check
@@ -414,13 +421,11 @@ class Publisher:
 
     def _verify(self, conn: sqlite3.Connection, key: tuple[str, int], receipt: Receipt,
                 message: str, expected_sha: str | None) -> Result:
-        try:
-            state = self._transport.merge_state(receipt)
-        except (EvidenceReadError, OSError):
-            return Result(Outcome.DISCREPANCY)
+        state = self._transport.merge_state(receipt)
+        if not isinstance(state, MergeState) or not isinstance(state.feature, FeatureEvidence):
+            return Result(Outcome.UNKNOWN)
         publication = receipt.publication
-        if (not isinstance(state, MergeState) or not _matches_pull(state.pull, publication, PullRequestState.MERGED)
-                or state.pull.pr != receipt.pr or not isinstance(state.feature, FeatureEvidence)
+        if (not _matches_pull(state.pull, publication, PullRequestState.MERGED) or state.pull.pr != receipt.pr
                 or not isinstance(state.squash, Squash) or not isinstance(state.squash.commit, Commit)):
             return Result(Outcome.DISCREPANCY)
         commit = state.squash.commit
@@ -429,7 +434,7 @@ class Publisher:
                 or (commit.base_sha, commit.delta_sha256) != (publication.commit.base_sha, publication.commit.delta_sha256)
                 or not isinstance(state.squash.message, str) or state.squash.message.rstrip('\n') != message):
             return Result(Outcome.DISCREPANCY)
-        closed = state.feature.state is IssueState.CLOSED and state.closed_by == receipt.pr
+        closed = state.feature.state is IssueState.CLOSED and state.closure == Closure(receipt.pr, commit.head_sha)
         conn.execute('UPDATE story_squashes SET observed_sha = ?, verified = ? WHERE repo = ? AND pr = ?',
                      (commit.head_sha, int(closed), *key))
         return Result(Outcome.VERIFIED, squash_sha=commit.head_sha) if closed else Result(Outcome.DISCREPANCY)
