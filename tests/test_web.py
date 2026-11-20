@@ -275,9 +275,14 @@ def test_short_cache_expires_and_is_size_bounded(app, monkeypatch):
     now[0] += 4
     assert "No recent runs" in html(app.response("/"))
     assert len(app.journal.calls) > calls
-    for index in range(25):
+    for index in range(15):
         app.response(f"/unknown-{index}")
+    calls = len(app.journal.calls)
+    app.response("/")  # Touch the oldest entry before exceeding the limit.
+    app.response("/unknown-15")
     assert len(app.cache) == 16
+    app.response("/")
+    assert len(app.journal.calls) == calls  # The recently used page survived eviction.
 
 
 @pytest.fixture
