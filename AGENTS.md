@@ -1,5 +1,8 @@
 # Working on Floe
 
+"Build the happy path. Anything beyond the requested behavior is a proposal, not part of this
+ change." -- Ian Philpot
+
 ## Project and architecture
 
 Floe is a minimal local workflow runner: Python functions execute sequentially,
