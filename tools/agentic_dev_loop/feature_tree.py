@@ -65,11 +65,20 @@ class FeatureTree:
         object.__setattr__(self, "phases", MappingProxyType(dict(self.phases)))
 
 
+class UnknownReason(StrEnum):
+    PAGE_READ_FAILED = "page-read-failed"
+    INVALID_PAGE = "invalid-page"
+    INVALID_CHILD = "invalid-child"
+    DUPLICATE_CHILD = "duplicate-child"
+    INVALID_CURSOR = "invalid-cursor"
+    REPEATED_CURSOR = "repeated-cursor"
+
+
 @dataclass(frozen=True)
 class UnknownTree:
     """The feature is blocked on evidence; no partial inventory is usable."""
 
-    reason: str
+    reason: UnknownReason
 
 
 def _valid_ref(issue: object) -> bool:
@@ -101,20 +110,20 @@ def _read_feature_tree(transport: SubIssueTransport, feature: IssueRef) -> Featu
     phases: dict[int, Phase] = {}
     seen_children: set[IssueRef] = set()
     seen_cursors: set[str] = set()
-    cursor = None
+    cursor: str | None = None
     while True:
         try:
             page = transport.sub_issues(feature, cursor)
         except EvidenceReadError:
-            return UnknownTree("page-read-failed")
+            return UnknownTree(UnknownReason.PAGE_READ_FAILED)
         if not isinstance(page, SubIssuePage) or not isinstance(page.children, tuple):
-            return UnknownTree("invalid-page")
+            return UnknownTree(UnknownReason.INVALID_PAGE)
         for child in page.children:
             if not _valid_child(child) or child.issue == feature:
-                return UnknownTree("invalid-child")
+                return UnknownTree(UnknownReason.INVALID_CHILD)
             if child.issue in seen_children:
                 # Even identical repeats can signal a shifting page boundary.
-                return UnknownTree("duplicate-child")
+                return UnknownTree(UnknownReason.DUPLICATE_CHILD)
             seen_children.add(child.issue)
             if child.parent != feature or child.issue.repo != feature.repo:
                 continue
@@ -126,9 +135,9 @@ def _read_feature_tree(transport: SubIssueTransport, feature: IssueRef) -> Featu
         if cursor is None:
             return FeatureTree(phases)
         if not isinstance(cursor, str) or not cursor:
-            return UnknownTree("invalid-cursor")
+            return UnknownTree(UnknownReason.INVALID_CURSOR)
         if cursor in seen_cursors:
-            return UnknownTree("repeated-cursor")
+            return UnknownTree(UnknownReason.REPEATED_CURSOR)
         seen_cursors.add(cursor)
 
 

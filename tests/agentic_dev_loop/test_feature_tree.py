@@ -9,6 +9,7 @@ from tools.agentic_dev_loop.feature_tree import (
     IssueRef,
     Phase,
     SubIssuePage,
+    UnknownReason,
     UnknownTree,
     read_feature_trees,
 )
@@ -90,13 +91,13 @@ def test_legacy_mapping_does_not_supply_missing_edges():
 
 
 @pytest.mark.parametrize(("second_page", "reason"), [
-    (EvidenceReadError("fixture outage"), "page-read-failed"),
-    (SubIssuePage((), "later"), "repeated-cursor"),
-    (SubIssuePage((), ""), "invalid-cursor"),
-    (SubIssuePage((child(29, "Story: Self-edge"),), None), "invalid-child"),
-    (SubIssuePage((child(37, "Design: Conflicting title"),), None), "duplicate-child"),
-    (SubIssuePage((child(37, "Story: First", parent=OTHER),), None), "duplicate-child"),
-    (SubIssuePage((child(37, "Story: First"),), None), "duplicate-child"),
+    (EvidenceReadError("fixture outage"), UnknownReason.PAGE_READ_FAILED),
+    (SubIssuePage((), "later"), UnknownReason.REPEATED_CURSOR),
+    (SubIssuePage((), ""), UnknownReason.INVALID_CURSOR),
+    (SubIssuePage((child(29, "Story: Self-edge"),), None), UnknownReason.INVALID_CHILD),
+    (SubIssuePage((child(37, "Design: Conflicting title"),), None), UnknownReason.DUPLICATE_CHILD),
+    (SubIssuePage((child(37, "Story: First", parent=OTHER),), None), UnknownReason.DUPLICATE_CHILD),
+    (SubIssuePage((child(37, "Story: First"),), None), UnknownReason.DUPLICATE_CHILD),
 ])
 def test_unknown_feature_does_not_hide_an_independent_feature(second_page, reason):
     transport = FixtureTransport({
@@ -107,7 +108,9 @@ def test_unknown_feature_does_not_hide_an_independent_feature(second_page, reaso
 
     trees = read_feature_trees(transport, iter([FEATURE, OTHER]))
 
-    assert trees == {FEATURE: UnknownTree(reason), OTHER: FeatureTree({101: Phase.STORY})}
+    assert isinstance(trees[FEATURE], UnknownTree)
+    assert trees[FEATURE].reason is reason
+    assert trees[OTHER] == FeatureTree({101: Phase.STORY})
     assert transport.requests == [(FEATURE, None), (FEATURE, "later"), (OTHER, None)]
 
 
@@ -118,6 +121,6 @@ def test_failed_first_page_is_not_known_empty():
     })
 
     assert read_feature_trees(transport, [FEATURE, OTHER]) == {
-        FEATURE: UnknownTree("page-read-failed"),
+        FEATURE: UnknownTree(UnknownReason.PAGE_READ_FAILED),
         OTHER: FeatureTree({}),
     }
