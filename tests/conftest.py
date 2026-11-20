@@ -4,8 +4,18 @@ import pytest
 def pytest_addoption(parser):
     parser.addoption(
         "--systemd-e2e", action="store_true", default=False,
-        help="deploy and run generated floe-e2e-* workflows under the real user systemd",
+        help="deploy generated floe-e2e-* workflows (requires the trusted live_e2e.py lease)",
     )
+
+
+def pytest_configure(config):
+    if config.getoption("--systemd-e2e"):
+        from tools.agentic_dev_loop.live_e2e import Blocked, require_lease
+
+        try:
+            require_lease()
+        except Blocked as exc:
+            raise pytest.UsageError(str(exc)) from exc
 
 
 def pytest_collection_modifyitems(config, items):
