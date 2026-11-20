@@ -277,3 +277,47 @@ protection against arbitrary same-user commands, candidate code or old
 checkouts that bypass the entry point. Use only authorized fixtures in the
 maintainer's session; production automation still needs a protected deployment
 and the isolation required by the ADR.
+
+## Checked E2E fixture attestation
+
+`checked_e2e.validate_fixture()` runs the full live suite through the same lease.
+A trusted supervisor supplies the fixture pin, interpreter, manager context and
+receipt path. Its reader supplies **current** evidence for the exact
+(repo/PR, head SHA, base SHA, tested merge SHA, ADR revision). CI and PR-Agent
+must each report success from the configured producer, with a complete review
+whose findings are all fixed or explained. Producer identities are facts from
+an authenticated reader, not visible check names, PR comments or candidate
+files. Missing evidence, a draft/closed candidate or unknown/pending redesign
+blocks the run. The supervisor checks evidence again at launch and after cleanup;
+these observations are not an atomic check against external changes.
+
+Stage the reviewed commit as a plain tree (no `.git`, `.venv` or extra files)
+from a protected Git source. Provision a separate trusted Python environment
+with the fixture's dependencies and a non-editable install of the pinned Floe
+code. The gate checks file bytes and executable bits against the Git tree and
+holds the directory descriptor used as the child's working directory. Symlinks,
+submodules, and trees with archive-time exports that differ from Git are not
+supported. Tree checks do not protect against a writer who can mutate the
+staging area in place during the run, or tamper with the interpreter or tooling.
+Those paths must be controlled by the supervisor.
+
+For one supervised demonstration, after confirming no legacy run and no
+`floe-e2e-*` units, run **from the separately protected tooling root** (not the
+fixture or a Builder worktree):
+
+```sh
+python3.14 -E -s -B -m tools.agentic_dev_loop.checked_e2e fixture \
+  --repo /path/to/protected/git-repo --pin "$REVIEWED_FIXTURE_SHA" \
+  --checkout /path/to/staged-tree --python /path/to/fixture-env/bin/python \
+  --receipt /path/to/private-output/new-receipt.json
+```
+
+This command uses synthetic CI, review, PR, head, base and ADR identities. It
+makes no GitHub calls. The supervisor writes a new private
+`supervised-fixture-e2e` receipt under the lease only after a zero test exit,
+verified cleanup and final evidence and tree checks. It never replaces a prior
+receipt. A fixture receipt is not a story merge credential. The desktop entry
+has no unattended candidate mode or authenticated GitHub evidence adapter.
+Do not enable candidate E2E until an approved isolated boundary keeps candidate
+code away from the trusted supervisor, unrelated resources and manager sockets,
+and personal/production credentials.

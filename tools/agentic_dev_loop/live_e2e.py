@@ -1,6 +1,7 @@
 """Trusted Linux local-user-manager entry point (deploy outside candidate worktrees)."""
 
 import argparse
+from collections.abc import Callable
 from contextlib import contextmanager
 from dataclasses import dataclass
 import fcntl
@@ -247,14 +248,22 @@ def verify_clean(target: Target) -> None:
             raise Blocked(f'live E2E timer stamp remains: {stamp}')
 
 
-def _run_suite(target: Target, checkout: Path, python: Path, fd: int, selection: str | None) -> int:
+def _run_suite(
+    target: Target, checkout: Path, python: Path, fd: int, selection: str | None,
+    *, checkout_fd: int | None = None,
+) -> int:
     read, write = os.pipe()
     try:
+        cwd = checkout if checkout_fd is None else Path(f'/proc/self/fd/{checkout_fd}')
+        inherited = (read, fd) if checkout_fd is None else (read, fd, checkout_fd)
+        if checkout_fd is None:
+            operation = ['_suite', str(read), *([selection] if selection is not None else [])]
+        else:
+            operation = ['_checked_suite', str(read), str(checkout_fd)]
         with subprocess.Popen(
-            [str(python), '-I', str(Path(__file__).resolve()), '_suite', str(read),
-             *([selection] if selection is not None else [])],
-            cwd=checkout, env={**target.environment(python.parent), _LEASE_FD: str(fd)},
-            pass_fds=(read, fd), start_new_session=True,
+            [str(python), '-I', str(Path(__file__).resolve()), *operation],
+            cwd=cwd, env={**target.environment(python.parent), _LEASE_FD: str(fd)},
+            pass_fds=inherited, start_new_session=True,
         ) as child:
             # The child cannot start pytest until its PGID is durably recorded.
             # If we die before that, EOF denies entry. Always close the write end
@@ -276,29 +285,41 @@ def _run_suite(target: Target, checkout: Path, python: Path, fd: int, selection:
             os.close(write)
 
 
-def _suite(gate: int, selection: list[str]) -> None:
+def _suite(gate: int, selection: list[str], *, checkout_fd: int | None = None) -> None:
     try:
         if os.read(gate, 1) != b'+':
             raise Blocked('live E2E supervisor did not release its startup gate')
     finally:
         os.close(gate)
     args = [sys.executable, '-I', '-m', 'pytest', '-q', '-m', 'systemd_e2e', '--systemd-e2e']
+    if checkout_fd is not None:
+        try:
+            if not os.path.samestat(os.stat('.'), os.fstat(checkout_fd)):
+                raise Blocked('pytest did not enter the checked directory')
+        finally:
+            os.close(checkout_fd)
+        args[1] = '-IB'
+        args += ['-p', 'no:cacheprovider']
     if selection:
         args += ['-k', selection[0]]
     os.execv(sys.executable, args)
 
 
+def _run_locked(target: Target, fd: int, suite: Callable[[int], int]) -> int:
+    if _read_dirty(target) is not None:
+        raise Blocked('previous live E2E run is dirty; use recover after inspecting residue')
+    _write_dirty(target, RunGroup.current(None))
+    verify_clean(target)
+    status = suite(fd)
+    # A nonzero pytest status may itself report a teardown failure. Even
+    # if the immediate audit passes, require explicit reconciliation.
+    _verify_and_clear(target, clear=status == 0)
+    return status
+
+
 def run(target: Target, checkout: Path, python: Path, selection: str | None = None) -> int:
     with _locked(target) as fd:
-        if _read_dirty(target) is not None:
-            raise Blocked('previous live E2E run is dirty; use recover after inspecting residue')
-        _write_dirty(target, RunGroup.current(None))
-        verify_clean(target)
-        status = _run_suite(target, checkout, python, fd, selection)
-        # A nonzero pytest status may itself report a teardown failure. Even
-        # if the immediate audit passes, require explicit reconciliation.
-        _verify_and_clear(target, clear=status == 0)
-        return status
+        return _run_locked(target, fd, lambda fd: _run_suite(target, checkout, python, fd, selection))
 
 
 def _verify_and_clear(target: Target, *, clear: bool) -> None:
@@ -320,6 +341,9 @@ def main(argv: list[str]) -> int:
     try:
         if len(argv) in (2, 3) and argv[0] == '_suite':
             _suite(int(argv[1]), argv[2:])
+            return 1
+        if len(argv) == 3 and argv[0] == '_checked_suite':
+            _suite(int(argv[1]), [], checkout_fd=int(argv[2]))
             return 1
         parser = argparse.ArgumentParser(description=__doc__)
         commands = parser.add_subparsers(dest='operation', required=True)
