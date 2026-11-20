@@ -291,6 +291,35 @@ def _scan_views(binary: Path, views: tuple[bytes, ...]) -> ReleaseStatus | None:
     return None
 
 
+def _destinations(tag: str) -> tuple[PurePosixPath, ...]:
+    prefix = PurePosixPath(".agents", "engineering", tag)
+    return tuple(prefix / name for name, _ in _FILES)
+
+
+def _content_status(data: tuple[bytes, ...], feature: IssueRef, tag: str, scanner: Path) -> ReleaseStatus | None:
+    if len(data) != len(_FILES) or any(type(blob) is not bytes or not 0 < len(blob) <= limit
+                                      for (_, limit), blob in zip(_FILES, data, strict=True)):
+        return ReleaseStatus.INVALID_CANDIDATE
+    try:
+        decoded = _decoded_index(data[0], feature, tag)
+        decoded_bytes = decoded.encode("utf-8")
+        summary = data[1].decode("utf-8")
+        if not summary.strip() or any(unicodedata.category(char) in {"Cc", "Cf"} and char not in "\n\r\t"
+                                      for char in summary):
+            return ReleaseStatus.INVALID_CANDIDATE
+    except (ValueError, RecursionError):
+        return ReleaseStatus.INVALID_CANDIDATE
+    if _requires_redaction(decoded) or _requires_redaction(summary):
+        return ReleaseStatus.REDACTION_REQUIRED
+    return _scan_views(scanner, (data[0], decoded_bytes, data[1]))
+
+
+def delta_digest(sealed: SealedCloseout) -> str:
+    manifest = [[str(file.path), sha256(file.data).hexdigest()]
+                for file in sorted(sealed.files, key=lambda file: file.path)]
+    return sha256(json.dumps(manifest, separators=(",", ":")).encode()).hexdigest()
+
+
 def release_closeout(candidate: FrozenCloseout, staging_root: Path, feature: IssueRef, slug: str,
                      scanner: Path, publish: Callable[[SealedCloseout], None]) -> ReleaseStatus:
     """Gate one private handoff; invoke the trusted writer only with scanned bytes.
@@ -316,17 +345,10 @@ def release_closeout(candidate: FrozenCloseout, staging_root: Path, feature: Iss
                for (_, limit), blob in zip(_FILES, data, strict=True)):
             return ReleaseStatus.INVALID_CANDIDATE
         before_scan = _layout(staging_root, name, data)
-        decoded = _decoded_index(data[0], feature, tag)
-        summary = data[1].decode("utf-8")
-        if not summary.strip() or any(unicodedata.category(char) in {"Cc", "Cf"} and char not in "\n\r\t"
-                                      for char in summary):
-            return ReleaseStatus.INVALID_CANDIDATE
-    except (OSError, ValueError, RecursionError):  # Includes Unicode and handoff schema errors.
+    except (OSError, ValueError):
         return ReleaseStatus.INVALID_CANDIDATE
 
-    if _requires_redaction(decoded) or _requires_redaction(summary):
-        return ReleaseStatus.REDACTION_REQUIRED
-    status = _scan_views(scanner, (data[0], decoded.encode("utf-8"), data[1]))
+    status = _content_status(data, feature, tag, scanner)
     if status is not None:
         return status
     try:
@@ -335,8 +357,6 @@ def release_closeout(candidate: FrozenCloseout, staging_root: Path, feature: Iss
     except (OSError, ValueError):
         return ReleaseStatus.CANDIDATE_CHANGED
 
-    prefix = PurePosixPath(".agents", "engineering", tag)
-    sealed = SealedCloseout(tuple(SealedFile(prefix / path, blob)
-                                  for (path, _), blob in zip(_FILES, data, strict=True)))
+    sealed = SealedCloseout(tuple(SealedFile(path, blob) for path, blob in zip(_destinations(tag), data, strict=True)))
     publish(sealed)
     return ReleaseStatus.RELEASED
