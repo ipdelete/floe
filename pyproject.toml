@@ -17,12 +17,14 @@ build-backend = "uv_build"
 module-name = ["floe", "floe_cli", "floe_web"]
 
 [tool.pytest.ini_options]
-addopts = "-m 'not live'"
+addopts = "-m 'not live and not web'"
 markers = [
-    "live: needs the real user systemd session and journald (run with -m live)",
+    "live: needs the real user systemd session and journald",
+    "web: needs Playwright and its Chromium browser (run with -m web)",
 ]
 
 [dependency-groups]
 dev = [
     "pytest>=9.2.0",
+    "pytest-playwright>=0.10.0",
 ]

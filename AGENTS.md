@@ -51,24 +51,8 @@ for versioning, tags, validation, and maintainer approval.
 
 ## Testing and validation
 
-```bash
-uv sync
-uv run pytest -q
-uv run pytest -q -m live  # needs the real user systemd session and journald
-uv run python examples/deploy_demo.py  # validates/plans; no writes or manager calls
-git diff --check
-```
-
-Write tests from the outside in:
-
-1. Start from a user claim and write one live e2e test for it.
-2. Trace the path that test takes and write contract tests for the seams it
-   crosses, with real components on both sides.
-3. For each component behind a contract, write unit tests for its logic.
-   Fake only external boundaries, copying the shapes they really produce.
-
-What a layer teaches you can change the others. A new claim starts a new
-pass.
+Before adding or changing tests, read [tests/AGENTS.md](tests/AGENTS.md) for the
+outside-in method, local checks, and browser setup.
 
 ## Documentation expectations
 
