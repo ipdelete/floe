@@ -67,9 +67,9 @@ committing workflow YAML does not create approval rules or tag protection.
    `## [0.2.0] - YYYY-MM-DD` section. Leave an Unreleased section for later work.
    Include prerequisites, compatibility changes, and reinstall/recovery steps
    when relevant; do not imply that all unit upgrades are automatic.
-3. Run the normal validation from [Development](../.agents/development.md), commit the
-   version/lockfile/changelog changes, and open a release PR. Wait for CI and
-   review, then merge it.
+3. Run the normal [local validation](../AGENTS.md#testing-and-validation),
+   commit the version/lockfile/changelog changes, and open a release PR. Wait
+   for CI and review, then merge it.
 4. Tag the exact merged commit, not the pre-merge branch commit:
 
    ```bash

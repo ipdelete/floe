@@ -47,6 +47,5 @@ installing it, and watching its timer start a run.
 
 ## Development
 
-See the [development guide](.agents/development.md) for tests and CI, and
-[engineering knowledge](.agents/engineering/README.md) for investigation/design
-records and the development workflow.
+See [local validation](AGENTS.md#testing-and-validation) for test commands and
+[CI](.github/workflows/ci.yml) for hosted checks.
