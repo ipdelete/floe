@@ -34,3 +34,30 @@ to retry under another key. The logical fixture writer checks for a note again
 before insert; any existing note is left alone. There is deliberately no GitHub
 mutation adapter, claim of atomic GitHub comment updates, or deployed worker
 lifecycle guarantee.
+
+## Design PR refusal fixture
+
+```sh
+uv run pytest -q tests/agentic_dev_loop/test_merge.py
+```
+
+`attempt_story_squash()` is the fixture's trusted merge entry point, separate
+from the tick. Supply the canonical ADR path and any known design issue
+identities (including legacy #30 for feature #29) from trusted configuration,
+not from the PR. A `Design:` title, an actual closing link to a design issue,
+or a change to the canonical ADR blocks squash. This includes deletions and
+both sides of renames. The decision log is an ordinary file (D-23); updating it
+does not make a story PR a design PR. Paths are exact, case-sensitive repository
+paths in the Git diff, not filenames resolved in a checkout. `Design:` is the
+same literal title prefix used for feature discovery. Neither the author's
+identity nor a request for an exception changes this policy.
+
+The fixture checks every page of both evidence sources before accepting a PR as
+non-design. The transport must attest to candidate identity, complete counts,
+and exhaustion, or fail the read. The broker reclassifies after the separate
+story-gate check; fresh unknown evidence or a changed classification snapshot
+blocks squash. Tests stub the story gates and record only the fake squash
+request, not a merge result. There is no live adapter, no GitHub enforcement,
+and no proof that mutable PR metadata can be checked atomically with a real
+squash request. The fixture imposes no restriction on the maintainer acting
+outside the loop.
