@@ -62,6 +62,31 @@ and no proof that mutable PR metadata can be checked atomically with a real
 squash request. The fixture imposes no restriction on the maintainer acting
 outside the loop.
 
+## Installed fixture lifetime gate
+
+`tests/agentic_dev_loop/test_installed_fixture.py` builds the candidate Floe
+wheel offline and uses a separate, non-editable virtualenv with locked runtime
+dependencies. The offline checks verify the console entry point, dry-run unit
+files and interpreter path with a deliberately broken mock Builder checkout.
+The workflow and loop snapshot are staged read-only outside that checkout;
+mutable fixture inputs/observations and the admission ledger are separate.
+
+The two live cases run via the [trusted lease](#live-e2e-lease), as part of the
+full suite. They require a local user manager with cgroup v2, journald,
+`systemd-run`, and `uv` (on PATH or in `~/.local/bin`, with the locked artifacts
+already cached). They verify a timer and two manual requests joining one tick,
+and a timeout killing a tick-local child but not the independent worker. A
+fresh tick reuses the same reservation; cancellation collects the worker unit
+and retains the terminal record. The transient adapter maps the launcher's
+reservation to `floe-e2e-worker-<run-id>.service` and checks transient-unit and
+run/session ownership before stopping it. Unexpected exits or interruptions
+before a verified stop receipt remain ambiguous; a missing unit is not a
+terminal outcome. The postflight still checks for residues under the same lease.
+
+No production timer, live GitHub transport or Pi worker is configured. A
+read-only snapshot and distinct cgroups establish path and lifetime separation
+for this fixture, not filesystem or credential isolation from same-user code.
+
 ## Live E2E lease
 
 Use one reviewed copy of `live_e2e.py` pinned outside Builder worktrees. Run it
