@@ -17,9 +17,9 @@ build-backend = "uv_build"
 module-name = ["floe", "floe_cli", "floe_web"]
 
 [tool.pytest.ini_options]
-addopts = "-m 'not e2e'"
+addopts = "-m 'not live'"
 markers = [
-    "e2e: live tests against the real user systemd and journald (run with -m e2e)",
+    "live: needs the real user systemd session and journald (run with -m live)",
 ]
 
 [dependency-groups]

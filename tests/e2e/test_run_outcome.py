@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-pytestmark = pytest.mark.e2e
+pytestmark = pytest.mark.live
 
 FLOE = str(Path(sys.executable).parent / "floe")
 
