@@ -48,6 +48,7 @@ exact generated interpreter command.
 ```bash
 uv sync
 uv run pytest -q
+uv run pytest -q -m e2e  # live: real user systemd and journald
 uv run python examples/deploy_demo.py  # validates/plans; no writes or manager calls
 git diff --check
 ```

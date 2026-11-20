@@ -16,6 +16,12 @@ build-backend = "uv_build"
 [tool.uv.build-backend]
 module-name = ["floe", "floe_cli", "floe_web"]
 
+[tool.pytest.ini_options]
+addopts = "-m 'not e2e'"
+markers = [
+    "e2e: live tests against the real user systemd and journald (run with -m e2e)",
+]
+
 [dependency-groups]
 dev = [
     "pytest>=9.2.0",
