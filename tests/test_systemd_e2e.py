@@ -1,11 +1,8 @@
 """Opt-in tests against the real user systemd session and journald.
 
-    uv run pytest -q -m systemd_e2e --systemd-e2e
-
-Every test deploys its own generated workflow, named floe-e2e-<random>, from a
-temporary directory, and uninstalls it afterward. Units with that prefix that
-an interrupted session left behind are removed before and after the module.
-Nothing else in the user session is touched. Normal pytest runs skip this module.
+Use the trusted live_e2e.py entry point. Every test deploys its own generated
+workflow and removes it afterward. The entry point refuses residue rather than
+implicitly taking ownership of anything named floe-e2e-*.
 """
 
 import json
@@ -94,27 +91,6 @@ def assert_clean(name: str) -> None:
     assert name not in [w["name"] for w in floe_json("list")]
 
 
-def leftover_names() -> set[str]:
-    """floe-e2e-* units with files in the unit directory or loaded in systemd."""
-    names = {file.name.rsplit(".", 1)[0] for file in store().path.glob(f"{PREFIX}*")
-             if file.name.endswith((".service", ".timer"))}
-    listed = subprocess.run(
-        ["systemctl", "--user", "list-units", "--all", "--plain", "--no-legend", f"{PREFIX}*"],
-        capture_output=True, text=True, timeout=30,
-    ).stdout
-    names |= {line.split()[0].rsplit(".", 1)[0] for line in listed.splitlines() if line.strip()}
-    return names
-
-
-def remove_leftovers() -> None:
-    for name in sorted(leftover_names()):
-        for unit in (f"{name}.service", f"{name}.timer"):
-            if (store().path / unit).is_symlink() and (store().path / unit).resolve() == Path("/dev/null"):
-                subprocess.run(["systemctl", "--user", "unmask", unit], capture_output=True, timeout=30)
-        floe_command("uninstall", name, check=False)
-        assert_clean(name)
-
-
 @dataclass
 class Flow:
     name: str
@@ -136,13 +112,6 @@ class Flow:
 
 
 # --- Fixtures ------------------------------------------------------------------
-
-@pytest.fixture(scope="module", autouse=True)
-def no_leftovers():
-    remove_leftovers()
-    yield
-    remove_leftovers()
-
 
 @pytest.fixture
 def workflow(tmp_path):
@@ -470,7 +439,10 @@ def test_foreign_unit_needs_adopt(workflow):
     flow = workflow(SIMPLE, install=False)
     units = store()
     units.path.mkdir(parents=True, exist_ok=True)
-    (units.path / flow.service).write_text(FOREIGN)
+    fixture_file = units.path / flow.service
+    with fixture_file.open('x') as stream:
+        stream.write(FOREIGN)
+        created = os.fstat(stream.fileno())
     try:
         result = floe_command("install", str(flow.script), check=False)
         assert result.returncode == 1 and "adopt to take over" in result.stderr
@@ -481,19 +453,26 @@ def test_foreign_unit_needs_adopt(workflow):
         assert units.is_owned(flow.service) and units.is_owned(flow.timer)
     finally:
         if not units.is_owned(flow.service):  # uninstall leaves foreign files alone
-            (units.path / flow.service).unlink(missing_ok=True)
+            assert os.path.samestat(created, fixture_file.lstat()) and not fixture_file.is_symlink()
+            assert fixture_file.read_text() == FOREIGN
+            fixture_file.unlink()
 
 
 def test_masked_unit_is_never_overwritten(workflow):
     flow = workflow(SIMPLE, install=False)
     units = store()
+    assert_clean(flow.name)
+    fixture_mask = units.path / flow.timer
     subprocess.run(["systemctl", "--user", "mask", flow.timer], check=True, capture_output=True, timeout=30)
+    created = fixture_mask.lstat()
     try:
         result = floe_command("install", "--adopt", str(flow.script), check=False)
         assert result.returncode == 1 and "masked or linked" in result.stderr
         assert (units.path / flow.timer).resolve() == Path("/dev/null")
         assert not (units.path / flow.service).exists(), "a unit was written despite the conflict"
     finally:
+        assert os.path.samestat(created, fixture_mask.lstat()) and fixture_mask.is_symlink()
+        assert fixture_mask.readlink() == Path('/dev/null')
         subprocess.run(["systemctl", "--user", "unmask", flow.timer], check=True, capture_output=True, timeout=30)
 
 

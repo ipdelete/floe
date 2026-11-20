@@ -27,9 +27,10 @@ feature.
   files. Generated E2E workflows use the `floe-e2e-` prefix.
 - Standing approval (#29, D-05, D-20): story PRs run the live E2E suite last,
   on the maintainer's machine, limited to generated `floe-e2e-*` units and one
-  run at a time. Until the E2E lock exists (D-15), first check that no other live
-  run is in progress (`systemctl --user list-units --all 'floe-e2e-*'` is empty);
-  if one is, wait. The agentic loop may install and validate its own units there.
+  run at a time. Use the [trusted live E2E entry point](tools/agentic_dev_loop/README.md#live-e2e-lease)
+  for both manual and automated runs (D-15). During the transition from older
+  checkouts, confirm no legacy live run is in progress before starting. The
+  agentic loop may install and validate its own units there.
   Anything else that changes the user's systemd session still needs approval.
 - Agents use the maintainer's `gh` login (#29, D-11). Never merge a design PR
   (one that changes an effort's `design.md`, closes a design issue, or is titled
@@ -176,10 +177,9 @@ git diff --check
 - For packaging or service-command changes, build a wheel and validate a clean
   installation outside the checkout, including the console entry point and
   exact generated interpreter command. Run offline unit verification where applicable.
-- Run the real-session suite separately, last, and only under the standing
-  approval or explicit approval: `uv run pytest -q -m systemd_e2e --systemd-e2e`.
-  It removes every leftover `floe-e2e-*` unit when it starts, so never run two
-  at once.
+- Run the [real-session suite](tools/agentic_dev_loop/README.md#live-e2e-lease)
+  separately, last, and only under standing or explicit approval. The launcher
+  refuses residue; verify recovery before retrying.
 - Report what ran, what was skipped, and remaining validation gaps. Passing mocks
   or offline unit verification does not establish real-systemd lifecycle behavior.
 

@@ -61,3 +61,48 @@ request, not a merge result. There is no live adapter, no GitHub enforcement,
 and no proof that mutable PR metadata can be checked atomically with a real
 squash request. The fixture imposes no restriction on the maintainer acting
 outside the loop.
+
+## Live E2E lease
+
+Use one reviewed copy of `live_e2e.py` pinned outside Builder worktrees. Run it
+as the authorized test user, with that user's local systemd manager running and
+with `systemctl`, `busctl`, and the ordinary Floe test tools available. The
+candidate checkout must already be synced with `uv sync`. Manual and automated
+callers use the same command (pass the candidate's absolute checkout and
+virtualenv interpreter paths):
+
+```sh
+python3.14 -I /path/to/trusted/live_e2e.py run \
+  --checkout "$PWD" --python "$PWD/.venv/bin/python"
+```
+
+The scope is one local Linux host and user-manager UID with the default XDG
+configuration and timer-state layout. No remote manager, alternate runtime
+namespace, or custom manager layout is supported. Caller `HOME`, XDG and bus
+aliases do not select a different lock or target. Keep the private
+`~/.local/state/floe-live-e2e/` directory on a persistent local filesystem. Do
+not replace the lock file or remove the dirty record by hand. A contender is
+refused immediately, before any manager queries. Raw `pytest --systemd-e2e`
+requires the inherited lease, even for an individual test module. `-k` on the
+launcher selects a subset; record it as such, not as a full-suite result.
+
+The launcher holds the lease through the read-only initial sweep, tests, fixture
+teardown and postflight. Prefix matches are evidence of residue, not ownership.
+The launcher never stops, unmasks or deletes units; it refuses to start while
+residue is present. Fixture teardown removes only fixtures from that run.
+
+If interrupted, or if queries, tests or cleanup failed, inspect the prior
+process group and named artifacts. Resolve only artifacts you can establish
+were created by the run, using the appropriate authorized cleanup (for example,
+`floe uninstall --name <workflow>` for an owned Floe deployment). Leave unknown
+ownership untouched. Then use the same trusted script with `recover` instead of
+`run` and its arguments. Recovery takes the same lock, verifies that the recorded
+process group is gone and that no E2E unit, queued job, unit file, enable link or
+timer stamp is visible, and clears the block only on success. A failed query is
+not a clean result. A busy lease is not a request to cancel another run.
+
+The lease serializes cooperating callers; it does not isolate code and is not
+protection against arbitrary same-user commands, candidate code or old
+checkouts that bypass the entry point. Use only authorized fixtures in the
+maintainer's session; production automation still needs a protected deployment
+and the isolation required by the ADR.
