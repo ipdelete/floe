@@ -3,8 +3,11 @@
 import json
 import os
 import re
+import shutil
 import stat
 import subprocess
+import sys
+import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -30,7 +33,7 @@ class SmokeInputs:
         try:
             if not pi_probe.private(directory, stat.S_ISDIR, 0o700):
                 raise ValueError
-            for name in ("config.json", "tick-token", "worker-token", "copilot.json", "models-store.json"):
+            for name in ("config.json", "github-token", "copilot.json", "models-store.json"):
                 path = directory / name
                 if not pi_probe.private(path, stat.S_ISREG, 0o600) or path.stat().st_nlink != 1:
                     raise ValueError
@@ -44,9 +47,7 @@ class SmokeInputs:
             if (not all(Path(config[field]).is_absolute() for field in ("node", "release"))
                     or not node.is_file() or not (release / "node_modules/.bin/pi").is_file()):
                 raise ValueError
-            tick_token = (directory / "tick-token").read_text().strip()
-            worker_token = (directory / "worker-token").read_text().strip()
-            if not tick_token.startswith("github_pat_") or not worker_token or tick_token == worker_token:
+            if not (directory / "github-token").read_text().strip():
                 raise ValueError
             auth = json.loads((directory / "copilot.json").read_text())
             if not isinstance(auth, dict) or set(auth) != {"github-copilot"}:
@@ -67,7 +68,7 @@ class SmokeInputs:
                 "--ro-bind", "/etc/resolv.conf", "/etc/resolv.conf",
                 "--ro-bind", "/etc/ssl/certs/ca-certificates.crt", "/etc/ssl/certs/ca-certificates.crt",
                 "--ro-bind", str(Path(pi_probe.__file__).resolve()), "/probe.py",
-                "--ro-bind", str(self.directory / f"{role}-token"), "/input/github",
+                "--ro-bind", str(self.directory / "github-token"), "/input/github",
                 "--bind", str(output), "/output"]
         if Path("/lib64").is_symlink():
             args += ["--symlink", os.readlink("/lib64"), "/lib64"]
@@ -189,5 +190,79 @@ def read_outcome(output, reservation):
     return outcome
 
 
+def input_directory(home):
+    return home / ".local/state/floe-pi-smoke-inputs"
+
+
 def live_inputs():
-    return SmokeInputs.load(Target.local().home / ".local/state/floe-pi-smoke-inputs")
+    return SmokeInputs.load(input_directory(Target.local().home))
+
+
+def _gh_value(args, env):
+    result = subprocess.run(["/usr/bin/gh", *args], env=env, stdin=subprocess.DEVNULL,
+                            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, check=True, timeout=10)
+    value = result.stdout.decode().strip()
+    if not value:
+        raise ValueError
+    return value
+
+
+def provision(home: Path, node: Path | None) -> None:
+    """Stage only the smoke inputs from the operator's existing logins."""
+    destination = input_directory(home)
+    if os.path.lexists(destination):
+        raise WorkerUnavailable("private smoke provisioning already exists")
+    try:
+        if node is None or not node.is_absolute():
+            raise ValueError
+        node = node.resolve(strict=True)
+        agent = home / ".pi/agent"
+        release = (agent / "install/releases/1.5.2").resolve(strict=True)
+        provider, model_id = pi_probe.MODEL.split("/", 1)
+        auth = json.loads((agent / "auth.json").read_text())[provider]
+        if not isinstance(auth, dict) or not auth:
+            raise ValueError
+        catalog = json.loads((agent / "models-store.json").read_text())[provider]
+        [model] = [entry for entry in catalog["models"] if entry["id"] == model_id and entry["provider"] == provider]
+        metadata = {key: catalog[key] for key in ("etag", "lastModified", "checkedAt") if key in catalog}
+        env = {**pi_probe.ENV, "HOME": str(home), "GH_PROMPT_DISABLED": "1", "GH_NO_UPDATE_NOTIFIER": "1"}
+        token = _gh_value(["auth", "token", "--hostname", "github.com"], env)
+        login = _gh_value(["api", "--hostname", "github.com", "--method", "GET", "--jq", ".login", "user"],
+                          {**env, "GH_TOKEN": token})
+        files = {
+            "config.json": json.dumps({"tick_login": login, "worker_login": login, "node": str(node),
+                                       "release": str(release)}),
+            "github-token": token + "\n",
+            "copilot.json": json.dumps({provider: auth}),
+            "models-store.json": json.dumps({provider: {**metadata, "models": [model]}}),
+        }
+        destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix=".floe-pi-smoke-", dir=destination.parent) as stage:
+            staged = Path(stage) / "inputs"
+            staged.mkdir(mode=0o700)
+            for name, value in files.items():
+                fd = os.open(staged / name, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                with os.fdopen(fd, "w") as stream:
+                    stream.write(value)
+            SmokeInputs.load(staged)
+            staged.rename(destination)
+    except (OSError, ValueError, TypeError, KeyError, subprocess.SubprocessError):
+        raise WorkerUnavailable("could not provision private smoke inputs from existing logins") from None
+
+
+def main(argv):
+    if argv != ["provision"]:
+        print("usage: python -m tools.agentic_dev_loop.pi_smoke provision", file=sys.stderr)
+        return 2
+    try:
+        executable = shutil.which("node")
+        provision(Target.local().home, Path(executable) if executable else None)
+    except WorkerUnavailable as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    print("Private Pi smoke inputs provisioned.")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

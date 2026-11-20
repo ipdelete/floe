@@ -13,7 +13,7 @@ import pytest
 from tools.agentic_dev_loop import pi_probe as probe
 from tools.agentic_dev_loop.installed_fixture import Fixture, REQUEST
 from tools.agentic_dev_loop.launcher import AttemptNotFound, AttemptState, Reservation, WorkerUnavailable
-from tools.agentic_dev_loop.pi_smoke import SmokeManager, SmokeInputs, live_inputs, read_outcome
+from tools.agentic_dev_loop.pi_smoke import SmokeManager, SmokeInputs, live_inputs, provision, read_outcome
 
 
 def test_gh_receives_token_only_in_child_environment(monkeypatch):
@@ -134,8 +134,8 @@ def test_role_mounts_do_not_share_credentials(tmp_path):
         inputs.sandbox("worker", tmp_path / "worker-io")
     worker = inputs.sandbox("worker", tmp_path / "worker-io", worktree=tmp_path / "worktree")
     assert "--clearenv" in tick and "--clearenv" in worker
-    assert str(tmp_path / "tick-token") in tick and str(tmp_path / "tick-token") not in worker
-    for name in ("worker-token", "copilot.json", "release", "node"):
+    assert str(tmp_path / "github-token") in tick and str(tmp_path / "github-token") in worker
+    for name in ("copilot.json", "release", "node"):
         assert str(tmp_path / name) in worker and str(tmp_path / name) not in tick
     assert str(tmp_path) not in tick and str(tmp_path) not in worker
 
@@ -179,6 +179,55 @@ def test_provisioning_fails_closed_without_inputs(tmp_path):
         SmokeInputs.load(tmp_path / "absent")
 
 
+def test_provision_uses_one_existing_login_and_filters_pi_inputs(monkeypatch, tmp_path, capsys):
+    agent = tmp_path / ".pi/agent"
+    release = agent / "install/releases/1.5.2"
+    executable = release / "node_modules/.bin/pi"
+    executable.parent.mkdir(parents=True)
+    executable.touch()
+    auth = {"type": "oauth", "access": "synthetic-model-secret"}
+    (agent / "auth.json").write_text(json.dumps({"github-copilot": auth, "other": "dropped"}))
+    model = {"id": "gpt-6.2-sol", "provider": "github-copilot"}
+    (agent / "models-store.json").write_text(json.dumps({
+        "github-copilot": {"models": [{"id": "unrelated"}, model], "checkedAt": 1}, "other": {},
+    }))
+    calls = []
+
+    def run(argv, **kwargs):
+        calls.append(argv[1:])
+        assert kwargs["stderr"] == subprocess.DEVNULL
+        assert "synthetic-login-token" not in argv
+        if argv[1:3] == ["auth", "token"]:
+            assert "GH_TOKEN" not in kwargs["env"]
+            value = "synthetic-login-token\n"
+        else:
+            assert kwargs["env"]["GH_TOKEN"] == "synthetic-login-token"
+            value = "maintainer\n"
+        return subprocess.CompletedProcess(argv, 0, stdout=value.encode())
+
+    monkeypatch.setattr(subprocess, "run", run)
+    provision(tmp_path, Path("/usr/bin/true"))
+    directory = tmp_path / ".local/state/floe-pi-smoke-inputs"
+    assert directory.stat().st_mode & 0o777 == 0o700
+    assert {path.name for path in directory.iterdir()} == {
+        "github-token", "copilot.json", "models-store.json", "config.json",
+    }
+    assert all(not path.is_symlink() and path.stat().st_mode & 0o777 == 0o600 for path in directory.iterdir())
+    inputs = SmokeInputs.load(directory)
+    assert inputs.tick_login == inputs.worker_login == "maintainer"
+    assert inputs.release == release
+    assert (directory / "github-token").read_text().strip() == "synthetic-login-token"
+    assert json.loads((directory / "copilot.json").read_text()) == {"github-copilot": auth}
+    assert json.loads((directory / "models-store.json").read_text()) == {
+        "github-copilot": {"models": [model], "checkedAt": 1},
+    }
+    assert [call[:2] for call in calls] == [["auth", "token"], ["api", "--hostname"]]
+    assert capsys.readouterr() == ("", "")
+    with pytest.raises(WorkerUnavailable, match="already exists"):
+        provision(tmp_path, Path("/usr/bin/true"))
+    assert len(calls) == 2
+
+
 def test_outcome_temporary_file_is_not_followed(tmp_path):
     unrelated = tmp_path / "unrelated"
     unrelated.write_text("unchanged")
@@ -215,7 +264,7 @@ def test_installed_pi_smoke_boundary(tmp_path, role):
     # call: missing local auth must fail after the isolation checks pass.
     inputs = SmokeInputs(tmp_path, "reader", "maintainer", Path("/usr/bin/true"), tmp_path / "pi")
     inputs.release.mkdir()
-    for name in ("tick-token", "worker-token", "copilot.json", "models-store.json"):
+    for name in ("github-token", "copilot.json", "models-store.json"):
         (tmp_path / name).touch(mode=0o600)
     output = tmp_path / "output"
     output.mkdir(mode=0o700)

@@ -156,7 +156,7 @@ def execute(role, identity, session_id):
         raise Blocked("unknown smoke role")
     require_isolation(role)
     token = GITHUB.read_text().strip()
-    if not token or (role == "tick" and not token.startswith("github_pat_")):
+    if not token:
         raise Blocked("required GitHub credential unavailable")
     check_github(role, token, identity)
     if role == "worker":

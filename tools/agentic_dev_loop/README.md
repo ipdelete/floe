@@ -93,29 +93,34 @@ This is opt-in and budgets one Pi prompt. Use the same reviewed lease entry
 point below, with the exact selection `-k installed_pi_smoke`. The ordinary
 live suite runs credential-free service isolation controls, not the model call.
 
-Before the run, an operator must provision the following under their private
-`~/.local/state/floe-pi-smoke-inputs/` (directory `0700`, regular files `0600`,
-no links). The fixture does not create tokens, fall back to the operator's
-ambient logins, or copy a whole home or Pi directory:
+Before the run, the maintainer provisions the probe from their existing `gh`
+and Pi logins. With the reviewed Node executable on `PATH` and the managed Pi
+1.5.2 release installed, run from the checkout:
 
-| File | Required contents |
-| --- | --- |
-| `config.json` | `tick_login`, `worker_login` (exact expected GitHub logins, worker must be the configured maintainer), `node`, `release` (absolute paths to the reviewed Node executable and pinned Pi release directory) |
-| `tick-token` | Already-provisioned fine-grained GitHub credential scoped to `ipdelete/floe`, with read-only permissions including Issues read |
-| `worker-token` | Separate credential for the maintainer's `gh` login |
-| `copilot.json` | Pi-native auth JSON containing only the `github-copilot` entry |
-| `models-store.json` | Reviewed Pi catalog cache containing the pinned Copilot model, without secrets or extra provider configuration |
+```sh
+uv run python -m tools.agentic_dev_loop.pi_smoke provision
+```
 
-Use a trusted Pi release supporting the print and session flags (validated CLI
-contract: Pi 1.5.2). The host needs `/usr/bin/python3.14`, `gh`, `git`,
+This creates `~/.local/state/floe-pi-smoke-inputs/` (`0700`, regular `0600`
+files, no links). It stages one existing GitHub token for both services and
+records the exact login that token identifies, the absolute Node and Pi paths,
+and only the Copilot auth and pinned model catalog entries. It does not
+create tokens, print credentials, copy a whole home or Pi directory, or
+replace existing provisioning. For a refresh, with no smoke running, move
+an existing input directory to another private location before provisioning
+again. That directory can also contain earlier private sessions and ledgers.
+
+The host needs `/usr/bin/python3.14`, `gh`, `git`,
 `libkeyutils.so.1`, Bubblewrap with unprivileged user namespaces, cgroup v2,
 and effective systemd socket and syscall restrictions. The two transient services start without a
 terminal or shell activation. Each mounts only its explicit role inputs;
 neither gets the host home, runtime directory, inherited environment or access
 to the Unix sockets or kernel keyring. The live probes check these conditions
-before touching auth. The tick makes fixed GETs, including a bad-auth control;
-checking these reads does not establish the permissions of a misprovisioned
-GitHub token. The operator must verify its read-only scope at provisioning.
+before touching auth. Both services use the maintainer's existing `gh` token
+(D-11). It is **not** a read-only credential: the trusted tick code makes
+only fixed GETs, including a bad-auth control. This is a code restriction,
+not a GitHub permission boundary. The tick receives no Copilot auth or model
+catalog.
 
 The trusted supervisor runs the read-only tick probe first, then uses the
 fixture reconciliation and launcher to admit one worker. This deliberately
