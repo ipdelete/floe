@@ -407,6 +407,8 @@ class Writer:
         gate = _compare(operation.change, evidence.snapshot)
         if gate is _Gate.UNKNOWN:
             return Result(Outcome.UNKNOWN)
+        if evidence.pending:
+            return Result(Outcome.IN_FLIGHT)
         if isinstance(operation.change, WriteRun) and isinstance(evidence.snapshot, RunState):
             current = evidence.snapshot.current
             terminal = None
@@ -419,8 +421,6 @@ class Writer:
                 return Result(Outcome.CONFLICT)
         if gate is _Gate.CONFLICT:
             return Result(Outcome.CONFLICT)
-        if evidence.pending:
-            return Result(Outcome.IN_FLIGHT)
         if gate is _Gate.ABSENT:
             return evidence
         conn.execute("UPDATE writes SET receipt = ? WHERE id = ?", (gate, operation.id))

@@ -255,6 +255,17 @@ def test_conflicting_terminal_evidence_cannot_be_replaced_by_a_stale_read(state)
     assert transport.calls == [('read', op)] * 3
 
 
+def test_pending_terminal_observation_cannot_pin_the_terminal_result(state):
+    change, before, after, conflict = CASES[6][:4]
+    transport = Transport(before, after)
+    op = Operation('terminal', REPO, change)
+    transport.evidence = Evidence(REPO, conflict, pending=True)
+    assert run(state, transport, op).outcome is Outcome.IN_FLIGHT
+    transport.evidence = Evidence(REPO, before)
+    assert run(state, transport, op).receipt == TERMINAL.comment_id
+    assert transport.calls == [('read', op), ('read', op), ('send', op, 1), ('read', op)]
+
+
 @pytest.mark.parametrize('change,snapshot', [
     (CASES[1][0], replace(ISSUES, matches=(IssueRecord(1, 'Story', 'Body'), IssueRecord(2, 'Story', 'Body')))),
     (CASES[4][0], replace(PR, base_sha=OTHER)),
