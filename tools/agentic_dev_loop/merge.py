@@ -59,6 +59,8 @@ class MergeTransport(Protocol):
     Pages must be bound to the supplied candidate, not stamped with an assumed
     identity. `None` cursor after a page means verified exhaustion, not a cap or
     a missing cursor. Closing links are actual GitHub edges, not PR body text.
+    Translate expected I/O and evidence failures at the adapter boundary;
+    unexpected programming errors are not treated as missing evidence.
     """
 
     def candidate(self, pr: IssueRef) -> Candidate: ...
@@ -68,7 +70,12 @@ class MergeTransport(Protocol):
     def closing_issues(self, candidate: Candidate, cursor: str | None) -> Page[ClosingIssue]: ...
 
     def squash(self, candidate: Candidate) -> None:
-        """Request a squash for this PR with the expected head SHA."""
+        """Request a squash only with a server-enforced expected head SHA.
+
+        The transport must use ``candidate.head_sha`` as a merge precondition,
+        not as a separate read before an unconditional request. This does not
+        make changes to PR metadata atomic with the squash.
+        """
         ...
 
 
