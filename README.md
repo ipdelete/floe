@@ -1,51 +1,24 @@
 # Floe
 
-A minimal local workflow runner using Python, systemd timers, and journald.
-Tasks are Python functions executed in dependency order, sequentially by default. systemd
-handles scheduling and process lifecycle; journald stores execution history.
-Tasks can opt into bounded retries using Tenacity, Floe's only runtime dependency.
-Tasks can [pass small return values by keyword](docs/workflows.md#pass-small-results-to-downstream-tasks).
-Installed workflows can [opt in to bounded parallel workers](docs/workflows.md#run-independent-tasks-in-parallel).
+Floe runs Python tasks in the order you set. Use it to run a workflow now or on a schedule. On Linux, systemd starts scheduled runs and journald keeps their logs.
+
+**[Start here: run and schedule your first workflow](docs/quickstart.md).**
 
 ## Requirements
 
-- Linux with systemd and a user systemd session
-- Python 3.14 or newer; deployed services use the installing Python environment,
-  which must remain available with Floe and Tenacity installed
-- `systemctl`, `journalctl`, and `systemd-analyze` (for deployment calendar/timeout validation)
-- [uv](https://docs.astral.sh/uv/) to install the `floe` command
+- Linux and Python 3.14 or newer
+- [uv](https://docs.astral.sh/uv/) to install Floe from this repo
+- For scheduled runs and history: a user systemd session and the `systemctl`, `systemd-analyze`, and `journalctl` commands
 
-```bash
-uv sync                # installs the `floe` command into .venv
-source .venv/bin/activate   # or prefix commands with `uv run`
-```
+Tenacity is Floe's only third-party runtime dependency. Floe uses it for retries and installs it automatically.
 
-## Quickstart
+## Docs
 
-```bash
-floe run examples/workflow.py        # run directly: events on stdout, task output on stderr
-floe install examples/workflow.py    # write a systemd service and timer for workflow "mydag"
-floe start mydag                     # run it under systemd now
-floe runs mydag                      # its history, from journald
-floe logs mydag                      # events and output of the latest run
-floe web                             # read-only dashboard at http://127.0.0.1:8080/
-floe uninstall mydag
-```
+- [Write a workflow](docs/workflows.md)
+- [Install and schedule it](docs/deployment.md)
+- [Read run history and logs](docs/history.md)
+- [Open the local dashboard](docs/web.md)
+- [Use the Python library](docs/library.md)
+- [Install a release wheel or publish a release](docs/releases.md)
 
-The [quickstart](docs/quickstart.md) walks through writing a workflow,
-installing it, and watching its timer start a run.
-
-## Documentation
-
-- [Quickstart](docs/quickstart.md): from a first workflow to scheduled runs
-- [Workflows](docs/workflows.md): define, run, and write workflows that run unattended
-- [Deployment](docs/deployment.md): install, list, uninstall, the service environment, schedules
-- [History](docs/history.md): runs and logs from journald
-- [Dashboard](docs/web.md): minimal read-only local web UI
-- [Library](docs/library.md): architecture and the Python API
-- [Releases](docs/releases.md): SemVer, GitHub Releases, approval setup, and recovery
-
-## Development
-
-See [local validation](AGENTS.md#testing-and-validation) for test commands and
-[CI](.github/workflows/ci.yml) for hosted checks.
+Contributing? See [local checks](AGENTS.md#testing-and-validation) and [CI](.github/workflows/ci.yml).
