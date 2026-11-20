@@ -64,8 +64,8 @@ jobs:
             git show --format= --check HEAD
           fi
       - run: uv sync --locked
-      - name: Test without real-systemd E2E
-        run: uv run --locked pytest -q -m 'not systemd_e2e'
+      - name: Test
+        run: uv run --locked pytest -q
       - name: Validate deployment offline
         run: uv run --locked python examples/deploy_demo.py
       - name: Build wheel through source distribution

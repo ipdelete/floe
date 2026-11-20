@@ -32,38 +32,26 @@ feature.
 - `src/floe_cli/` owns arguments, presentation, stdout/stderr routing, and exit
   codes. Interfaces and examples use only exports in `floe.__all__`.
 - Keep rendering, file operations, service-manager calls, and journal access
-  separate. `tests/test_boundaries.py` enforces architectural constraints.
+  separate.
 
 ## Releases
 
 When asked to prepare or publish a release, follow [Releases](docs/releases.md)
 for versioning, tags, validation, and maintainer approval.
 
+For packaging or service-command changes, build a wheel and validate a clean
+installation outside the checkout, including the console entry point and
+exact generated interpreter command.
+
 ## Testing and validation
 
 ```bash
 uv sync
 uv run pytest -q
+uv run pytest -q -m live  # needs the real user systemd session and journald
 uv run python examples/deploy_demo.py  # validates/plans; no writes or manager calls
 git diff --check
 ```
-
-- Add a concrete regression test for each bug. Ask what plausible broken
-  implementation would still pass; use targeted mutation probes when useful.
-- Assert observable behavior, not just execution without exceptions. Filter
-  tests need observable filtering; error-isolation tests need multiple workflows;
-  streaming tests need controlled producers, timeouts, and reliable cleanup.
-- Mock external boundaries, not the logic under review. Keep fakes faithful to
-  the properties being tested. Use temporary directories for normal tests.
-- Remove redundant tests, but retain useful smoke, architecture, packaging, and
-  public-API contracts. An exported API is not dead code for lacking callers.
-- For packaging or service-command changes, build a wheel and validate a clean
-  installation outside the checkout, including the console entry point and
-  exact generated interpreter command. Run offline unit verification where applicable.
-- Run the real-session suite separately:
-  `uv run pytest -q -m systemd_e2e --systemd-e2e`.
-- Report what ran, what was skipped, and remaining validation gaps. Passing mocks
-  or offline unit verification does not establish real-systemd lifecycle behavior.
 
 ## Documentation expectations
 

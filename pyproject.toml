@@ -17,8 +17,9 @@ build-backend = "uv_build"
 module-name = ["floe", "floe_cli", "floe_web"]
 
 [tool.pytest.ini_options]
+addopts = "-m 'not live'"
 markers = [
-    "systemd_e2e: opt-in tests deploying generated workflows to the real user systemd and journald",
+    "live: needs the real user systemd session and journald (run with -m live)",
 ]
 
 [dependency-groups]
