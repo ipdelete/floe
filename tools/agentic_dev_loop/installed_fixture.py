@@ -193,7 +193,7 @@ class _Issues:
             {102: DesignEvidence(IssueState.CLOSED, False, None, (approval,),
                                  AdrAtMerge(_POLICY.adr_path, _REVISION, "100644", changed_in_pr=True)),
              103: StoryEvidence(IssueState.OPEN, False, _REVISION, (), None, ())},
-            IssueState.OPEN, False, False, backlogs=(Backlog(_REVISION, (103,)),),
+            IssueState.OPEN, False, False, backlogs=(Backlog(_REVISION, (103,)),), revision_requests=(),
         )
         return Observation(evidence, {103: AttemptInput(REQUEST.key.issue_id, REQUEST.input_snapshot, self.note)})
 

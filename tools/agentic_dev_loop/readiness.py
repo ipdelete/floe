@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from types import MappingProxyType
 
-from .feature_tree import FeatureTree, IssueRef, Phase, UnknownTree
+from .feature_tree import FeatureTree, IssueRef, Phase, UnknownTree, valid_issue_ref
 
 
 class IssueState(StrEnum):
@@ -43,6 +43,7 @@ class PullRequest:
     squash_verified: bool | None = None  # verified for this PR, including the required trailers
     merged_by: str | None = None
     approved_revision: str | None = None  # independently bound to this story PR, not the current issue label
+    head_branch: str | None = None  # recorded same-repo head name, even after ref deletion; None for unverified/fork
 
 
 @dataclass(frozen=True)
@@ -115,6 +116,16 @@ class Backlog:
 
 
 @dataclass(frozen=True)
+class RevisionRequest:
+    """Normalized Builder contradiction journaled on the requesting story."""
+
+    feature: IssueRef
+    issue: IssueRef
+    revision: str
+    attempt: int
+
+
+@dataclass(frozen=True)
 class FeatureEvidence:
     tree: FeatureTree | UnknownTree
     children: Mapping[int, SpikeEvidence | DesignEvidence | StoryEvidence]
@@ -123,6 +134,7 @@ class FeatureEvidence:
     closeout_active: bool | None  # active closeout work or an existing closeout candidate
     backlogs: tuple[Backlog, ...] | None = ()  # complete published history; None is unknown
     planner_active: bool | None = False
+    revision_requests: tuple[RevisionRequest, ...] | None = None  # complete trusted history
 
     def __post_init__(self):
         object.__setattr__(self, "children", MappingProxyType(dict(self.children)))
@@ -147,6 +159,7 @@ class Reason(StrEnum):
     INVALID_DESIGN_PR = "invalid-design-pr"
     INVALID_ADR = "invalid-adr"
     PENDING_JUDGMENT = "pending-judgment"
+    REVISION_REQUESTED = "revision-requested"
     INVALID_BACKLOG = "invalid-backlog"
     SUPERSEDED = "superseded"
     STALE_STORY = "stale-story-evidence"
@@ -203,11 +216,11 @@ def _issue_number(value: object) -> bool:
     return type(value) is int and value > 0
 
 
-def _sha(value: object) -> bool:
+def valid_sha(value: object) -> bool:
     return isinstance(value, str) and re.fullmatch(r"[0-9a-f]{40}", value) is not None
 
 
-def _matches(pr: PullRequest, feature: IssueRef, issue: int) -> bool:
+def matches_child_pr(pr: PullRequest, feature: IssueRef, issue: int) -> bool:
     if not isinstance(pr.closes, tuple) or len(pr.closes) != 1:
         return False
     [closing_issue] = pr.closes
@@ -223,7 +236,7 @@ def _open_candidate(pr: PullRequest) -> bool:
 
 
 def _verified_merge(pr: PullRequest) -> bool:
-    return (pr.state is PullRequestState.MERGED and pr.squash_verified is True and _sha(pr.squash_sha))
+    return (pr.state is PullRequestState.MERGED and pr.squash_verified is True and valid_sha(pr.squash_sha))
 
 
 def _known_issue(state: IssueState | None, active: bool | None) -> bool:
@@ -263,7 +276,7 @@ def _spike_handed_off(spike: SpikeEvidence) -> bool:
     pin, handoff = spike.result, spike.handoff
     return (spike.state is IssueState.CLOSED and isinstance(pin, SpikeResult)
             and isinstance(pin.branch, str) and pin.branch.startswith("refs/heads/")
-            and pin.branch != "refs/heads/" and _sha(pin.commit) and pin.retained is True
+            and pin.branch != "refs/heads/" and valid_sha(pin.commit) and pin.retained is True
             and isinstance(handoff, SpikeHandoff) and _issue_number(handoff.design)
             and handoff.design == spike.design and handoff.commit == pin.commit)
 
@@ -301,7 +314,7 @@ def _check_design(
     if not design.candidates:
         return Reason.PENDING_DESIGN if design.state is IssueState.OPEN else Reason.INVALID_DESIGN_PR
     [pr] = design.candidates
-    if not _matches(pr, feature, issue):
+    if not matches_child_pr(pr, feature, issue):
         return Reason.INVALID_DESIGN_PR
     if _open_candidate(pr):
         return Reason.PENDING_DESIGN
@@ -329,7 +342,7 @@ def _story_pr(
             return Reason.STORY_DISCREPANCY
         return None
     [pr] = story.candidates
-    if not _issue_number(story.expected_pr) or pr.number != story.expected_pr or not _matches(pr, feature, issue):
+    if not _issue_number(story.expected_pr) or pr.number != story.expected_pr or not matches_child_pr(pr, feature, issue):
         return Reason.STORY_DISCREPANCY
     if pr.approved_revision != approval.sha:
         return Reason.STALE_STORY
@@ -340,7 +353,7 @@ def _story_pr(
     return Reason.STORY_DISCREPANCY
 
 
-def _story_numbers(values: object) -> bool:
+def valid_issue_numbers(values: object) -> bool:
     return (isinstance(values, tuple) and all(_issue_number(issue) for issue in values)
             and len(set(values)) == len(values))
 
@@ -352,9 +365,9 @@ def _current_backlog(
         return Reason.UNKNOWN_EVIDENCE
     by_revision = {}
     for plan in backlogs:
-        if (not isinstance(plan, Backlog) or not _sha(plan.revision) or plan.revision not in revisions
-                or plan.revision in by_revision or not _story_numbers(plan.expected)
-                or not _story_numbers(plan.superseded) or set(plan.expected).intersection(plan.superseded)):
+        if (not isinstance(plan, Backlog) or not valid_sha(plan.revision) or plan.revision not in revisions
+                or plan.revision in by_revision or not valid_issue_numbers(plan.expected)
+                or not valid_issue_numbers(plan.superseded) or set(plan.expected).intersection(plan.superseded)):
             return Reason.INVALID_BACKLOG
         by_revision[plan.revision] = plan
 
@@ -396,7 +409,7 @@ def _decide_stories(
         pr = _story_pr(feature, issue, story, approval)
         if isinstance(pr, Reason):
             blockers.append(Blocker(issue, pr))
-        elif (not _story_numbers(story.prerequisites) or issue in story.prerequisites
+        elif (not valid_issue_numbers(story.prerequisites) or issue in story.prerequisites
               or not set(story.prerequisites).issubset(ordered)):
             blockers.append(Blocker(issue, Reason.INVALID_BACKLOG))
         elif pr is not None and pr.number in seen_prs:
@@ -443,6 +456,28 @@ def _decide_stories(
         else:
             work = Work(Role.ARCHIVIST, feature.number, approval)
     return Decision(approval, work, tuple(blockers), tuple(completed.values()), tuple(merge_candidates))
+
+
+def _revision_blockers(
+    feature: IssueRef, requests: tuple[RevisionRequest, ...] | None,
+    revisions: list[str], stories: list[int],
+) -> tuple[Blocker, ...]:
+    if not isinstance(requests, tuple):
+        return (Blocker(feature.number, Reason.UNKNOWN_EVIDENCE),)
+    requesting = set()
+    for request in requests:
+        if (not isinstance(request, RevisionRequest) or not valid_issue_ref(request.feature)
+                or request.feature != feature or not valid_issue_ref(request.issue)
+                or request.issue.repo != feature.repo or request.issue.number == feature.number
+                or not _issue_number(request.attempt) or not valid_sha(request.revision)
+                or request.revision not in revisions):
+            return (Blocker(feature.number, Reason.UNKNOWN_EVIDENCE),)
+        if request.revision == revisions[-1]:
+            requesting.add(request.issue.number)
+    # A missing edge for a current request might reflect an unlink, not resolution.
+    if not requesting.issubset(stories):
+        return (Blocker(feature.number, Reason.UNKNOWN_EVIDENCE),)
+    return tuple(Blocker(issue, Reason.REVISION_REQUESTED) for issue in stories if issue in requesting)
 
 
 def decide_feature(feature: IssueRef, policy: Policy, evidence: FeatureEvidence) -> Decision:
@@ -511,6 +546,9 @@ def decide_feature(feature: IssueRef, policy: Policy, evidence: FeatureEvidence)
 
     if evidence.pending_judgment:
         return Decision(approval=approval, blockers=(Blocker(feature.number, Reason.PENDING_JUDGMENT),))
+    blockers = _revision_blockers(feature, evidence.revision_requests, revisions, stories)
+    if blockers:
+        return Decision(approval=approval, blockers=blockers)
     ordered_stories = tuple(stories)
     backlog = _current_backlog(evidence.backlogs, tuple(revisions), ordered_stories)
     if isinstance(backlog, Reason):
