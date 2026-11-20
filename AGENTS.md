@@ -3,6 +3,17 @@
 "Build the happy path. Anything beyond the requested behavior is a proposal, not part of this
  change." -- Ian Philpot
 
+## Code readability
+
+- Put the main steps in the order they happen. A reader should be able to
+  follow the normal path without jumping between helpers.
+- Keep checks, limits, and cleanup close to the actions they protect. A
+  clear happy path still handles failure; don't hide or remove safeguards
+  to make the code shorter.
+- Extract a helper when its name explains a real step or gives a tricky
+  detail a clear home. Don't add a layer just to shorten a function or file.
+  Keep existing boundaries between logic, I/O, and presentation.
+
 ## Project and architecture
 
 Floe is a minimal local workflow runner: Python functions execute sequentially,
