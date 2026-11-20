@@ -49,10 +49,6 @@ feature.
 When asked to prepare or publish a release, follow [Releases](docs/releases.md)
 for versioning, tags, validation, and maintainer approval.
 
-For packaging or service-command changes, build a wheel and validate a clean
-installation outside the checkout, including the console entry point and
-exact generated interpreter command.
-
 ## Testing and validation
 
 ```bash
