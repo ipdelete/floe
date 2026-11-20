@@ -57,22 +57,28 @@ class Application:
                 return Response(200, render.CSS.encode(), "text/css; charset=utf-8")
             if path == "/favicon.svg":
                 return Response(200, render.favicon().encode(), "image/svg+xml", _FAVICON_CSP)
-            cached = self.cache.get(path)
-            if cached and time.monotonic() - cached[0] < CACHE_SECONDS:
-                self.cache.move_to_end(path)
-                return cached[1]
-            response = self.page(path)
-            self.cache[path] = (time.monotonic(), response)
-            self.cache.move_to_end(path)
-            while len(self.cache) > 16:
-                self.cache.popitem(last=False)
-            return response
+            return self._cached_page(path)
         except floe.NotFoundError as exc:
             return self.error(404, str(exc), path=path)
         except floe.ValidationError:
             return self.error(400, "Invalid request", path=path)
         except (floe.FloeError, OSError, ValueError) as exc:
             return self.error(503, f"Unable to read workflow state: {exc}", path=path)
+
+    def _cached_page(self, path):
+        cached = self.cache.get(path)
+        if cached is not None:
+            rendered_at, response = cached
+            if time.monotonic() - rendered_at < CACHE_SECONDS:
+                self.cache.move_to_end(path)
+                return response
+
+        response = self.page(path)
+        self.cache[path] = (time.monotonic(), response)
+        self.cache.move_to_end(path)
+        while len(self.cache) > 16:
+            self.cache.popitem(last=False)
+        return response
 
     def page(self, path):
         if path == "/":
