@@ -47,7 +47,7 @@ export function openIntake({ directory, models, model, issues, scan }) {
     try {
       await scan(text);
     } catch {
-      setStatus.run('running', 'secret_scan_failed', id);
+      setStatus.run('blocked', 'secret_scan_failed', id);
       throw new Error('Secret scan did not pass; this intake is blocked');
     }
   }
@@ -106,14 +106,12 @@ export function openIntake({ directory, models, model, issues, scan }) {
     while (!stopping) {
       const job = next.get();
       if (!job) return;
-      if (!job.reason) {
-        setStatus.run('running', null, job.id);
-        try {
-          await checkText(job.id, job.request);
-          await run(job);
-        } catch {
-          // Never expose request text, provider diagnostics, or credentials in HTTP responses or logs.
-        }
+      setStatus.run('running', null, job.id);
+      try {
+        if (!job.attempted) await checkText(job.id, job.request);
+        await run(job);
+      } catch {
+        // Never expose request text, provider diagnostics, or credentials in HTTP responses or logs.
       }
       let current = byId.get(job.id);
       if (current.attempted && !current.issue_url) {
@@ -125,7 +123,7 @@ export function openIntake({ directory, models, model, issues, scan }) {
         }
         current = byId.get(job.id);
       }
-      const reason = current.reason ?? (current.attempted ? 'issue_creation_unconfirmed' : 'no_issue_published');
+      const reason = current.attempted ? 'issue_creation_unconfirmed' : current.reason ?? 'no_issue_published';
       setStatus.run(current.issue_url ? 'completed' : 'blocked', current.issue_url ? null : reason, job.id);
     }
   }

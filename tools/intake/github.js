@@ -45,7 +45,8 @@ export function githubIssues(token, fetchIssue = fetch) {
         if (!response.ok) throw new Error('GitHub issue lookup failed');
         const issues = await response.json();
         if (!Array.isArray(issues)) throw new Error('GitHub returned an invalid issue list');
-        const issue = issues.find((item) => !item?.pull_request && item?.body?.endsWith(`\n${marker}`));
+        const issue = issues.find((item) => !item?.pull_request && typeof item?.body === 'string' &&
+          item.body.trimEnd().endsWith(`\n${marker}`));
         if (issue) return receipt(issue);
         if (issues.length < 100) break;
       }

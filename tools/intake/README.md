@@ -40,8 +40,8 @@ curl -sS -H "Authorization: Bearer $INTAKE_TOKEN" \
   "http://127.0.0.1:8765/intake/$job_id"
 ```
 
-`POST /intake` accepts a nonblank request of at most 1,000 characters and returns
-`202` with an ID and a `Location` header. Retrying with the same key and request
+`POST /intake` accepts a nonblank request of at most 1,000 Unicode code points
+in a JSON body of up to 8 KiB. It returns `202` with an ID and a `Location` header. Retrying with the same key and request
 returns the same job; different text with that key returns `409`. Status is
 `queued`, `running`, `completed` (with the verified issue number and URL), or
 `blocked`. The opaque ID on the issue corresponds to `<id>.sqlite` locally;
@@ -62,7 +62,9 @@ scanned before it goes to GitHub. A finding, missing scanner, or scanner error
 blocks the job (`secret_scan_failed`); no finding details are returned. This is
 not a general privacy filter: submit only text appropriate for a public issue
 after drafting. `no_issue_published` means the agent or session did not produce
-a publishable issue.
+a publishable issue (for example, because of a provider failure). Blocked jobs
+are terminal and are not picked up at restart. Once a problem that happened
+before publication is resolved, submit a fresh request with a new key.
 
 Run `npm test` for local tests. They use a real Pi Durable harness and SQLite,
 a scripted model, and a fake GitHub boundary. No credentials are needed.

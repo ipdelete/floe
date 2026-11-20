@@ -21,7 +21,7 @@ async function readRequest(req) {
   try {
     const body = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks)));
     const request = body?.request;
-    if (typeof request === 'string' && request.length <= 1000 && request.trim()) {
+    if (typeof request === 'string' && [...request].length <= 1000 && request.trim()) {
       return { request: request.trim() };
     }
   } catch {
@@ -34,6 +34,10 @@ export function intakeServer(intake, token) {
   const expected = digest(`Bearer ${token}`);
   return createServer({ headersTimeout: 5_000, requestTimeout: 10_000 }, async (req, res) => {
     try {
+      const loopback = `127.0.0.1:${req.socket.localPort}`;
+      if (req.headers.host !== loopback && !(req.socket.localPort === 80 && req.headers.host === '127.0.0.1')) {
+        return send(res, 421, { error: 'expected_loopback_host' });
+      }
       if (!timingSafeEqual(digest(req.headers.authorization ?? ''), expected)) {
         return send(res, 401, { error: 'unauthorized' });
       }
