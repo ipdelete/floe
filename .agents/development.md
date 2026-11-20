@@ -69,10 +69,12 @@ The small inline tag/version/changelog check has regression tests in
 
 ## Opt-in real-session tests
 
-Run live tests only in an authorized user session through the
-[trusted E2E launcher](../tools/agentic_dev_loop/README.md#live-e2e-lease).
-Select just `test_managed_worker_gate_in_one_delegated_service` with the
-launcher's `-k` flag for the **managed-worker integration test**.
+With explicit approval, the **live managed-worker integration test** can be
+selected on its own:
+
+```bash
+uv run pytest -q tests/test_managed_systemd_e2e.py --systemd-e2e
+```
 
 This test creates one transient, runtime-limited `floe-e2e-managed-*.service`
 with `Delegate=yes` in the user manager (Linux cgroup v2; no sudo or persistent
@@ -86,11 +88,16 @@ without explicit authorization for the target session.
 
 `tests/test_parallel_systemd_e2e.py` is the product-level counterpart: it uses
 `floe install`, `start`, `cancel`, `logs` and `uninstall`, without calling the
-worker or scheduler under test. Run it only with authorization to install the
-generated services in the target session.
+worker or scheduler under test. Select it explicitly with `--systemd-e2e` only
+with authorization to install the generated services in the target session.
 
-The full suite is opt-in and uses the real user systemd session and journald.
-Each installed-workflow test generates its own workflow,
+To test against your real user systemd session and journald:
+
+```bash
+uv run pytest -q -m systemd_e2e --systemd-e2e
+```
+
+This is opt-in and takes about 20 seconds. Each test generates its own workflow,
 named `floe-e2e-<random>`, in a temporary directory, deploys it with the real
 `floe` command, and uninstalls it afterward, verifying that no unit files,
 enable links, loaded units, or timer stamps remain. The tests cover deployment
@@ -98,5 +105,6 @@ and idempotent reinstall, task output attribution, history and logs of successfu
 timed-out, running, and stopped runs, overlapping starts, schedule drift,
 missing definition files, interrupted uninstalls, foreign and masked units, and
 the timer starting runs. They execute only their own generated tasks and touch
-no other units. The launcher refuses residue from interrupted runs; follow the
-linked recovery procedure rather than sweeping by prefix.
+no other units. Leftover `floe-e2e-*` units from an interrupted session (for
+example after SIGKILL) are removed when the tests start, and can be removed by
+hand with `floe uninstall <name>`.
