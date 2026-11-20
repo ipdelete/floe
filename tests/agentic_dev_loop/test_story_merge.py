@@ -1,13 +1,16 @@
 import multiprocessing
 import os
 from dataclasses import replace
+from datetime import UTC, datetime, timedelta
+import json
 
 import pytest
 
-from tools.agentic_dev_loop.checked_e2e import Binding, Check, Evidence, FixtureAttestation, Review
+from tools.agentic_dev_loop.checked_e2e import Binding, Check, Evidence, FixtureAttestation
 from tools.agentic_dev_loop.feature_tree import EvidenceReadError, FeatureTree, IssueRef, Phase
 from tools.agentic_dev_loop.github_writes import initialize_writer
 from tools.agentic_dev_loop.merge import Candidate, ChangedPath, ChangeKind, ClosingIssue, Page
+from tools.agentic_dev_loop.pr_agent_review import Comment, ReviewEvidence, require_review
 from tools.agentic_dev_loop.readiness import (
     AdrAtMerge, Backlog, DesignEvidence, FeatureEvidence, IssueState, Policy,
     PullRequest, PullRequestState, RevisionRequest, StoryEvidence,
@@ -40,9 +43,23 @@ FEATURE_EVIDENCE = FeatureEvidence(
     IssueState.OPEN, False, False, (Backlog(REVISION, (STORY.number,)),), revision_requests=(),
 )
 CI = Check(BINDING, POLICY.ci_producer, "ci-run", "success")
-REVIEW = Review(Check(BINDING, POLICY.review_producer, "review-run", "success"), ())
+REVIEW_TIME = datetime(2026, 11, 20, tzinfo=UTC)
+
+
+def review_comment(*, findings=(), **run):
+    state = {
+        'schema_version': 1,
+        'last_run': {'complete': True, 'head_sha': HEAD, 'kind': 'full', 'run_id': HEAD, **run},
+        'findings': list(findings),
+    }
+    return Comment(41, POLICY.review_producer, REVIEW_TIME, REVIEW_TIME,
+                   f'<!-- pr-agent-review-state:v1\n{json.dumps(state)}\n-->')
+
+
+REVIEW = ReviewEvidence(PR, (review_comment(),))
+REVIEW_RUN = require_review(REVIEW, PR, HEAD, POLICY.review_producer, POLICY.readiness.maintainer).run_id
 CHECKS = Evidence(BINDING, True, False, CI, REVIEW)
-E2E = E2EResult(Check(BINDING, POLICY.e2e_producer, "e2e-run", "success"), CI.run_id, REVIEW.check.run_id, True)
+E2E = E2EResult(Check(BINDING, POLICY.e2e_producer, "e2e-run", "success"), CI.run_id, REVIEW_RUN, True)
 GATES = GateEvidence(FEATURE, FEATURE_EVIDENCE, CHECKS, True, E2E)
 
 
@@ -150,6 +167,28 @@ def test_fully_checked_squash_verifies_distinct_commit_and_closure(directory):
     assert transport.writes == 1
 
 
+def test_active_pr_agent_finding_blocks_squash_until_disposition(directory):
+    review = review_comment(findings=({'finding_id': 'abc', 'state': 'ACTIVE',
+                                       'path': 'foo.py', 'body': 'Possible issue'},))
+    later = REVIEW_TIME + timedelta(seconds=2)
+    note = Comment(42, POLICY.readiness.maintainer, later, later, '- abc: not applicable — reason')
+    pending = ReviewEvidence(PR, (review,))
+    clear = replace(pending, comments=(review, note))
+    run = require_review(clear, PR, HEAD, POLICY.review_producer, POLICY.readiness.maintainer)
+    transport = Atomic()
+    transport.gates_now = replace(GATES, checks=replace(CHECKS, review=pending),
+                                  e2e=replace(E2E, review_run=run.run_id))
+    merger = broker(directory, transport)
+    result = merger.reconcile(REQUEST)
+    assert result.outcome is Outcome.BLOCKED
+    assert 'abc' in result.reason
+    assert transport.requests == []
+
+    transport.gates_now = replace(transport.gates_now, checks=replace(CHECKS, review=clear))
+    assert merger.reconcile(REQUEST).outcome is Outcome.VERIFIED
+    assert len(transport.requests) == transport.writes == 1
+
+
 def test_squash_message_does_not_copy_closing_keywords_from_title(directory):
     transport = Atomic()
     transport.current = replace(CANDIDATE, title="Add behavior; fixes #29")
@@ -172,10 +211,12 @@ def test_head_precondition_is_not_an_atomic_base_precondition(directory):
     replace(GATES, checks=replace(CHECKS, ci=replace(CI, status="pending"))),
     replace(GATES, checks=replace(CHECKS, ci=replace(CI, binding=replace(BINDING, merge_sha=OTHER)))),
     replace(GATES, checks=replace(CHECKS, review=None)),
-    replace(GATES, checks=replace(CHECKS, review=replace(REVIEW, check=replace(REVIEW.check, producer="impostor")))),
-    replace(GATES, checks=replace(CHECKS, review=replace(REVIEW, check=replace(REVIEW.check, status="failure")))),
-    replace(GATES, checks=replace(CHECKS, review=replace(REVIEW, findings=None))),
-    replace(GATES, checks=replace(CHECKS, review=replace(REVIEW, findings=("fixed",)))),
+    replace(GATES, checks=replace(CHECKS, review=ReviewEvidence(PR, (replace(review_comment(), author='impostor'),)))),
+    replace(GATES, checks=replace(CHECKS, review=ReviewEvidence(PR, (review_comment(head_sha=OTHER),)))),
+    replace(GATES, checks=replace(CHECKS, review=ReviewEvidence(PR, (review_comment(complete=False, kind='partial'),)))),
+    replace(GATES, checks=replace(CHECKS, review=ReviewEvidence(PR, (review_comment(findings=('fixed',)),)))),
+    replace(GATES, checks=replace(CHECKS, review=ReviewEvidence(PR, (
+        replace(review_comment(), updated_at=REVIEW_TIME + timedelta(seconds=1)),)))),
     replace(GATES, review_clear=False),
     replace(GATES, e2e=replace(E2E, check=replace(E2E.check, status="failure"))),
     replace(GATES, e2e=replace(E2E, check=replace(E2E.check, producer="impostor"))),
@@ -183,7 +224,7 @@ def test_head_precondition_is_not_an_atomic_base_precondition(directory):
     replace(GATES, e2e=replace(E2E, ci_run="previous-run")),
     replace(GATES, e2e=replace(E2E, review_run="previous-run")),
     replace(GATES, e2e=replace(E2E, check=replace(E2E.check, binding=replace(BINDING, base_sha=OTHER)))),
-    replace(GATES, e2e=FixtureAttestation(BINDING, CI.run_id, REVIEW.check.run_id)),
+    replace(GATES, e2e=FixtureAttestation(BINDING, CI.run_id, REVIEW_RUN)),
     replace(GATES, feature_evidence=successor()),
     replace(GATES, feature_evidence=replace(FEATURE_EVIDENCE, revision_requests=(REVISION_REQUEST,))),
     replace(GATES, feature_evidence=replace(FEATURE_EVIDENCE, backlogs=(Backlog(REVISION, (), (STORY.number,)),))),
@@ -197,7 +238,8 @@ def test_each_gate_independently_blocks(directory, bad_gates):
     assert transport.requests == []
 
 
-@pytest.mark.parametrize('field', ['head_sha', 'base_sha', 'title', 'revision', 'path', 'closing_link', 'truncated_links'])
+@pytest.mark.parametrize('field', ['head_sha', 'base_sha', 'title', 'revision', 'path', 'closing_link',
+                                   'truncated_links', 'review'])
 def test_final_recheck_catches_change(directory, field):
     transport = Atomic()
 
@@ -210,6 +252,9 @@ def test_final_recheck_catches_change(directory, field):
             transport.links += (ClosingIssue(DESIGN, 'Retitled design'),)
         elif field == 'truncated_links':
             transport.closing_total = 2
+        elif field == 'review':
+            updated = replace(review_comment(), updated_at=REVIEW_TIME + timedelta(seconds=1))
+            transport.gates_now = replace(GATES, checks=replace(CHECKS, review=ReviewEvidence(PR, (updated,))))
         else:
             transport.current = replace(CANDIDATE, **{field: 'Design: Now design' if field == 'title' else OTHER})
 

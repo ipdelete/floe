@@ -3,7 +3,7 @@
 import argparse
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
-from enum import Enum
+from datetime import UTC, datetime
 import hashlib
 import json
 import os
@@ -15,6 +15,7 @@ import tempfile
 
 from . import live_e2e
 from .feature_tree import EvidenceReadError, IssueRef, valid_issue_ref
+from .pr_agent_review import Comment, ReviewBlocked, ReviewEvidence, ReviewRun, require_review
 from .readiness import valid_sha
 
 
@@ -45,24 +46,13 @@ class Check:
     status: str
 
 
-class Disposition(Enum):
-    FIXED = 'fixed'
-    EXPLAINED = 'explained'
-
-
-@dataclass(frozen=True)
-class Review:
-    check: Check
-    findings: tuple[Disposition, ...] | None  # () means a complete review with no findings
-
-
 @dataclass(frozen=True)
 class Evidence:
     binding: Binding | None
     open_nondraft: bool | None
     redesign_pending: bool | None
     ci: Check | None
-    review: Review | None
+    review: ReviewEvidence | None
 
 
 @dataclass(frozen=True)
@@ -74,7 +64,8 @@ class Fixture:
     checkout: Path
     python: Path  # separately provisioned fixture environment
     ci_producer: str
-    review_producer: str
+    review_producer: str  # GitHub login used by PR-Agent
+    loop_author: str      # GitHub login used for Builder dispositions
 
 
 @dataclass(frozen=True)
@@ -93,13 +84,7 @@ def check_passed(check: object, binding: Binding, producer: str) -> bool:
             and isinstance(check.run_id, str) and bool(check.run_id.strip()) and check.status == 'success')
 
 
-def review_passed(review: object, binding: Binding, producer: str) -> bool:
-    return (isinstance(review, Review) and check_passed(review.check, binding, producer)
-            and isinstance(review.findings, tuple)
-            and all(isinstance(item, Disposition) for item in review.findings))
-
-
-def _eligible(fixture: Fixture, read: Callable[[IssueRef], Evidence | None]) -> Evidence:
+def _eligible(fixture: Fixture, read: Callable[[IssueRef], Evidence | None]) -> tuple[Evidence, ReviewRun]:
     try:
         evidence = read(fixture.binding.pr)
     except (EvidenceReadError, OSError) as exc:
@@ -109,9 +94,12 @@ def _eligible(fixture: Fixture, read: Callable[[IssueRef], Evidence | None]) -> 
         raise live_e2e.Blocked('candidate is unknown, ineligible or blocked by redesign')
     if not check_passed(evidence.ci, fixture.binding, fixture.ci_producer):
         raise live_e2e.Blocked('no matching trusted CI success')
-    if not review_passed(evidence.review, fixture.binding, fixture.review_producer):
-        raise live_e2e.Blocked('no matching trusted PR-Agent success with all findings resolved')
-    return evidence
+    try:
+        run = require_review(evidence.review, fixture.binding.pr, fixture.binding.head_sha,
+                             fixture.review_producer, fixture.loop_author)
+    except ReviewBlocked as exc:
+        raise live_e2e.Blocked(str(exc)) from exc
+    return evidence, run
 
 
 @dataclass(frozen=True)
@@ -211,32 +199,34 @@ def validate_fixture(
     """
     if (not valid_binding(fixture.binding)
             or not all(path.is_absolute() for path in (fixture.repo, fixture.checkout, fixture.python, receipt))
-            or not all(isinstance(p, str) and p.strip() for p in (fixture.ci_producer, fixture.review_producer))
+            or not all(isinstance(p, str) and p.strip()
+                       for p in (fixture.ci_producer, fixture.review_producer, fixture.loop_author))
             or fixture.ci_producer == fixture.review_producer):
         raise live_e2e.Blocked('valid pinned fixture configuration required')
     with live_e2e._locked(target) as lease:
         if os.path.lexists(receipt):
             raise live_e2e.Blocked('fixture receipt already exists')
-        evidence = _eligible(fixture, read)
+        eligibility = _eligible(fixture, read)
+        evidence, review = eligibility
         tree = _tree(fixture.repo, fixture.binding.merge_sha)
         fd = os.open(fixture.checkout, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
         try:
             _verify_checkout(fixture.checkout, fd, tree)
 
             def suite(lease: int) -> int:
-                if _eligible(fixture, read) != evidence:
+                if _eligible(fixture, read) != eligibility:
                     raise live_e2e.Blocked('CI or review evidence changed before launch')
                 _verify_checkout(fixture.checkout, fd, tree)
                 return live_e2e._run_suite(target, fixture.checkout, fixture.python, lease, None, checkout_fd=fd)
 
             if live_e2e._run_locked(target, lease, suite) != 0:
                 raise live_e2e.Blocked('fixture suite did not pass; inspect and recover before reuse')
-            if _eligible(fixture, read) != evidence:
+            if _eligible(fixture, read) != eligibility:
                 raise live_e2e.Blocked('CI or review evidence changed during validation')
             _verify_checkout(fixture.checkout, fd, tree)
         finally:
             os.close(fd)
-        result = FixtureAttestation(fixture.binding, evidence.ci.run_id, evidence.review.check.run_id)
+        result = FixtureAttestation(fixture.binding, evidence.ci.run_id, review.run_id)
         _write_receipt(receipt, result)
         return result
 
@@ -252,9 +242,16 @@ def main(argv: list[str]) -> int:
     if args.pin != _DEMO_PIN:
         demo.error(f'reviewed fixture pin must be {_DEMO_PIN}')
     binding = Binding(IssueRef('fixture/floe', 1), '1' * 40, '2' * 40, _DEMO_PIN, '3' * 40)
-    fixture = Fixture(binding, args.repo, args.checkout, args.python, 'fixture-ci', 'fixture-review')
+    fixture = Fixture(binding, args.repo, args.checkout, args.python,
+                      'fixture-ci', 'fixture-review', 'fixture-loop')
     ci = Check(binding, fixture.ci_producer, 'synthetic-ci', 'success')
-    review = Review(Check(binding, fixture.review_producer, 'synthetic-review', 'success'), ())
+    now = datetime.now(UTC)
+    state = {'schema_version': 1, 'findings': [], 'last_run': {
+        'head_sha': binding.head_sha, 'kind': 'full', 'complete': True, 'run_id': 'synthetic-review',
+    }}
+    comment = Comment(1, fixture.review_producer, now, now,
+                      f'<!-- pr-agent-review-state:v1\n{json.dumps(state)}\n-->')
+    review = ReviewEvidence(binding.pr, (comment,))
     try:
         validate_fixture(live_e2e.Target.local(), fixture,
                          lambda _: Evidence(binding, True, False, ci, review), args.receipt)
