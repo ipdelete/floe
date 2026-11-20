@@ -103,7 +103,11 @@ class StoryEvidence:
 
 @dataclass(frozen=True)
 class Backlog:
-    """Planner's reconciled partition of all linked stories for one approval."""
+    """Planner's reconciled partition of all linked stories for one approval.
+
+    An explicitly published empty scope is valid, including when a revision
+    supersedes all remaining stories. Missing planning evidence is not a plan.
+    """
 
     revision: str
     expected: tuple[int, ...]
@@ -182,6 +186,12 @@ class StoryCompletion:
 
 @dataclass(frozen=True)
 class Decision:
+    """Scope results, not authorization to start or merge.
+
+    ``merge_candidates`` excludes draft PRs, stories with unmet prerequisites,
+    active work, and superseded scope, even if an expected PR already exists.
+    """
+
     approval: ApprovedDesign | None = None
     work: Work | None = None
     blockers: tuple[Blocker, ...] = ()
@@ -198,8 +208,18 @@ def _sha(value: object) -> bool:
 
 
 def _matches(pr: PullRequest, feature: IssueRef, issue: int) -> bool:
+    if not isinstance(pr.closes, tuple) or len(pr.closes) != 1:
+        return False
+    [closing_issue] = pr.closes
     return (_issue_number(pr.number) and pr.repo == feature.repo and pr.base == "master"
-            and pr.closes == (IssueRef(feature.repo, issue),) and _issue_number(pr.closes[0].number))
+            and isinstance(closing_issue, IssueRef) and _issue_number(closing_issue.number)
+            and closing_issue == IssueRef(feature.repo, issue))
+
+
+def _open_candidate(pr: PullRequest) -> bool:
+    return ((pr.state is PullRequestState.OPEN or pr.state is PullRequestState.DRAFT)
+            and pr.squash_sha is None and pr.merged_by is None
+            and (pr.squash_verified is None or pr.squash_verified is False))
 
 
 def _verified_merge(pr: PullRequest) -> bool:
@@ -283,7 +303,7 @@ def _check_design(
     [pr] = design.candidates
     if not _matches(pr, feature, issue):
         return Reason.INVALID_DESIGN_PR
-    if pr.state is PullRequestState.OPEN or pr.state is PullRequestState.DRAFT:
+    if _open_candidate(pr):
         return Reason.PENDING_DESIGN
     if not _verified_merge(pr) or pr.merged_by != policy.maintainer:
         return Reason.INVALID_DESIGN_PR
@@ -315,7 +335,7 @@ def _story_pr(
         return Reason.STALE_STORY
     if pr.state is PullRequestState.MERGED:
         return pr if story.state is IssueState.CLOSED and _verified_merge(pr) else Reason.STORY_DISCREPANCY
-    if story.state is IssueState.OPEN and (pr.state is PullRequestState.OPEN or pr.state is PullRequestState.DRAFT):
+    if story.state is IssueState.OPEN and _open_candidate(pr):
         return pr
     return Reason.STORY_DISCREPANCY
 
@@ -415,7 +435,7 @@ def _decide_stories(
         elif work is None:
             work = Work(Role.BUILDER, issue, approval)
 
-    if len(completed) == len(backlog.expected):
+    if completed.keys() == set(backlog.expected):
         if type(evidence.closeout_active) is not bool:
             blockers.append(Blocker(feature.number, Reason.UNKNOWN_EVIDENCE))
         elif evidence.closeout_active:
@@ -477,6 +497,8 @@ def decide_feature(feature: IssueRef, policy: Policy, evidence: FeatureEvidence)
             return Decision(approval=approval, blockers=(Blocker(issue, result),))
         pending_design = issue
 
+    # Resolve spike handoffs before offering Designer or advancing beyond an
+    # approval. Each pin still belongs to its original design, not today's tip.
     spike_decision = _spike_decision(spikes, order, approval)
     if spike_decision is not None:
         return spike_decision

@@ -118,11 +118,12 @@ def test_design_approval_pins_the_canonical_adr_to_the_maintainer_squash():
 
 
 @pytest.mark.parametrize("change", [
-    {"state": PullRequestState.OPEN, "squash_sha": None, "squash_verified": False},
+    {"state": PullRequestState.OPEN, "squash_sha": None, "squash_verified": False, "merged_by": None},
     {"merged_by": "someone-else"},
     {"repo": "fork/floe"},
     {"base": "dev"},
     {"closes": (IssueRef(FEATURE.repo, 2),)},
+    {"closes": (IssueRef(FEATURE.repo, True),)},  # bool equals 1 but isn't an issue number
     {"closes": (IssueRef("elsewhere/floe", 1),)},
     {"closes": (IssueRef(FEATURE.repo, 1), IssueRef(FEATURE.repo, 99))},
     {"squash_verified": False},
@@ -196,6 +197,8 @@ def test_verified_completion_unlocks_prerequisite_then_closeout_and_records_squa
 
 @pytest.mark.parametrize("invalid, reason", [
     (story(state=CLOSED), Reason.STORY_DISCREPANCY),
+    (story(expected_pr=35, candidates=(pr(35, 5, SQUASH, state=PullRequestState.OPEN),)),
+     Reason.STORY_DISCREPANCY),
     (replace(completed(5), state=OPEN), Reason.STORY_DISCREPANCY),
     (replace(completed(5), expected_pr=99), Reason.STORY_DISCREPANCY),
     (replace(completed(5), expected_pr=None), Reason.STORY_DISCREPANCY),
@@ -308,6 +311,42 @@ def test_unknown_backlog_history_and_active_planner_do_not_offer_another_worker(
     active = decide(feature(planner_active=True))
     assert active.work is None
     assert Blocker(FEATURE.number, Reason.ACTIVE_WORK) in active.blockers
+
+
+def test_closeout_requires_a_published_plan_but_confirmed_empty_scope_is_valid():
+    assert decide(feature()).work.role is Role.PLANNER
+    empty = decide(feature(backlog=Backlog(FIRST, ())))
+    assert empty.work == Work(Role.ARCHIVIST, FEATURE.number, empty.approval)
+    all_superseded = decide(feature(stories={5: story()}, backlog=Backlog(FIRST, (), (5,))))
+    assert all_superseded.work == Work(Role.ARCHIVIST, FEATURE.number, all_superseded.approval)
+    assert all_superseded.blockers == (Blocker(5, Reason.SUPERSEDED),)
+
+
+def test_spike_for_approved_design_keeps_its_original_handoff_during_a_revision():
+    pending = DesignEvidence(OPEN, False, 1, (), None)
+    pin = SpikeResult("refs/heads/spike/101-3", PIN, True)
+    done = SpikeEvidence(CLOSED, False, 1, pin, SpikeHandoff(1, PIN))
+    result = decide(feature(designs={1: design(), 2: pending}, spikes={3: done}))
+    assert result.work == Work(Role.DESIGNER, 2, result.approval)
+    assert result.approval.sha == FIRST
+
+    new_spike = SpikeEvidence(OPEN, False, 2)
+    result = decide(feature(designs={1: design(), 2: pending}, spikes={3: done, 4: new_spike}))
+    assert result.work == Work(Role.SPIKE, 4)
+    assert result.approval.sha == FIRST
+
+
+def test_merge_scope_excludes_drafts_active_work_and_unmet_prerequisites():
+    stories = {
+        5: story(expected_pr=35, candidates=(pr(35, 5),), prerequisites=(8,)),
+        6: story(expected_pr=36, candidates=(pr(36, 6),), active=True),
+        7: story(expected_pr=37, candidates=(pr(37, 7, state=PullRequestState.DRAFT),)),
+        8: story(),
+        9: story(expected_pr=39, candidates=(pr(39, 9),)),
+    }
+    result = decide(feature(stories=stories, backlog=Backlog(FIRST, tuple(stories))))
+    assert result.work == Work(Role.BUILDER, 8, result.approval)
+    assert result.merge_candidates == (39,)
 
 
 def test_current_backlog_does_not_reuse_prior_revision_completion_or_pr():
