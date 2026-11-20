@@ -45,6 +45,26 @@ export function githubIssues(token = process.env.GITHUB_TOKEN?.trim() || tokenFr
   }
 
   return {
+    async search(query) {
+      const terms = query.trim().split(/\s+/u);
+      if (query.length > 100 || terms.length > 3 || terms.some((term) => !/^[\p{L}\p{N}]+$/u.test(term))) {
+        throw new Error('Use up to three search keywords containing only letters and numbers');
+      }
+      const keywords = terms.map((term) => `"${term}"`).join(' OR ');
+      const q = `repo:${repo} is:issue (${keywords})`;
+      const params = new URLSearchParams({ q, per_page: '5' });
+      const response = await request(`https://api.github.com/search/issues?${params}`);
+      if (!response.ok) throw new Error('GitHub feature search failed');
+      const result = await response.json();
+      if (result?.incomplete_results !== false || !Array.isArray(result.items)) {
+        throw new Error('GitHub feature search was incomplete');
+      }
+      return result.items.slice(0, 5).map((issue) => ({
+        ...receipt(issue), title: issue.title.slice(0, 256), state: issue.state,
+        excerpt: (issue.body ?? '').slice(0, 300),
+      }));
+    },
+
     async create(id, title, description) {
       const body = `${description}\n\nIntake session: \`${id}\`\n\n${issueMarker(id)}`;
       const response = await request(endpoint, { method: 'POST', body: JSON.stringify({ title, body }) });

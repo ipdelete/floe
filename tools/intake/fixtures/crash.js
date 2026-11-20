@@ -6,6 +6,7 @@ const intake = openIntake({
   directory: process.argv[2],
   ...fakeModel(),
   issues: {
+    search: () => [],
     create(id) {
       writeSync(1, `${id}\n`);
       process.exit(44); // Crash before recording a GitHub receipt or a tool result.

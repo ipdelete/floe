@@ -7,10 +7,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import test from 'node:test';
+import { fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux';
 import { githubIssues, issueMarker } from './github.js';
 import { intakeServer } from './http.js';
 import { openIntake } from './intake.js';
-import { createDraft, fakeModel, issue } from './fixtures/fake.js';
+import { createDraft, draftCall, fakeModel, issue, searchCall, toolTurn } from './fixtures/fake.js';
 
 async function directory(t) {
   const path = await mkdtemp(join(tmpdir(), 'floe-intake-'));
@@ -21,7 +22,7 @@ async function directory(t) {
 async function waitForJob(readStatus) {
   for (let i = 0; i < 250; i++) {
     const job = await readStatus();
-    if (['completed', 'blocked'].includes(job.status)) return job;
+    if (['completed', 'duplicate', 'blocked'].includes(job.status)) return job;
     await sleep(20);
   }
   assert.fail('Intake did not settle');
@@ -47,11 +48,18 @@ printf 'test-cli-token\\n'
   assert.equal(probe.stdout, 'Bearer test-cli-token\nBearer test-explicit-token\n');
 });
 
-test('authenticated HTTP intake persists one job and offers only the issue tool', async (t) => {
+test('authenticated HTTP intake searches the repo before publishing one issue', async (t) => {
   const dir = await directory(t);
-  let posts = 0;
+  const calls = [];
   const issues = githubIssues('github-token', async (url, opts) => {
-    posts++;
+    if (!opts.method) {
+      calls.push('search');
+      const target = new URL(url);
+      assert.equal(target.origin + target.pathname, 'https://api.github.com/search/issues');
+      assert.equal(target.searchParams.get('q'), 'repo:ipdelete/floe is:issue ("skip" OR "tasks")');
+      return Response.json({ incomplete_results: false, items: [] });
+    }
+    calls.push('create');
     assert.equal(url, 'https://api.github.com/repos/ipdelete/floe/issues');
     assert.equal(opts.headers.authorization, 'Bearer github-token');
     assert.equal(opts.method, 'POST');
@@ -93,10 +101,66 @@ test('authenticated HTTP intake persists one job and offers only the issue tool'
   assert.equal((await post(JSON.stringify({ request: 'Different feature' }))).status, 409);
   const job = await waitForJob(async () => (await fetch(statusUrl, { headers })).json());
   assert.deepEqual(job, { id, status: 'completed', issue_number: issue.number, issue_url: issue.url });
-  assert.equal(posts, 1);
-  assert.deepEqual(offered, ['create_feature_issue']);
+  assert.deepEqual(calls, ['search', 'create']);
+  assert.deepEqual(offered, ['search_features', 'create_feature_issue']);
   assert.equal(input, 'Skip some tasks');
 });
+
+for (const [decision, outcome] of [
+  [{ duplicate: issue.number }, { status: 'duplicate', issue_number: issue.number, issue_url: issue.url }],
+  [{ possible_duplicate: true }, { status: 'blocked', reason: 'possible_duplicate' }],
+  [{ duplicate: 999 }, { status: 'blocked', reason: 'no_issue_published' }],
+]) {
+  test(`deduplication decision ${JSON.stringify(decision)} never creates an issue`, async (t) => {
+    const dir = await directory(t);
+    const candidate = { ...issue, title: 'Skip a workflow task', state: 'closed' };
+    let posts = 0;
+    let evidence;
+    const intake = openIntake({
+      directory: dir,
+      ...fakeModel((context) => {
+        evidence = context.messages.find((message) => message.role === 'toolResult');
+        return fauxAssistantMessage(JSON.stringify(decision));
+      }),
+      issues: {
+        search: () => [{ ...candidate, excerpt: 'Allow a task to be skipped.' }],
+        create: () => { posts++; return issue; },
+      },
+      scan: () => {},
+    });
+    t.after(() => intake.close());
+    const { id } = intake.submit('feature-1', 'Skip some tasks');
+    const expected = decision.possible_duplicate ? { ...outcome, matches: [candidate] } : outcome;
+    assert.deepEqual(await waitForJob(() => intake.status(id)), { id, ...expected });
+    assert.match(evidence.content[0].text, /Allow a task to be skipped\./);
+    assert.equal(posts, 0);
+  });
+}
+
+for (const scenario of ['no-search', 'same-round', 'failed-search']) {
+  test(`does not publish with ${scenario}`, async (t) => {
+    const dir = await directory(t);
+    let posts = 0;
+    let searches = 0;
+    const first = scenario === 'no-search' ? createDraft()
+      : scenario === 'same-round' ? toolTurn([searchCall, draftCall]) : toolTurn(searchCall);
+    const second = scenario === 'failed-search' ? createDraft() : fauxAssistantMessage('Done');
+    const issues = githubIssues('github-token', async (_url, options) => {
+      if (options.method === 'POST') posts++;
+      else searches++;
+      return Response.json({ incomplete_results: scenario === 'failed-search', items: [] });
+    });
+    const intake = openIntake({ directory: dir, ...fakeModel(second, first), issues, scan: () => {} });
+    const { id } = intake.submit('feature-1', 'Skip some tasks');
+    // For a failed search, the job is marked blocked immediately. Let the attempted next call finish too.
+    const job = await waitForJob(() => intake.status(id)).finally(() => intake.close());
+    assert.deepEqual(job, {
+      id, status: 'blocked', reason: scenario === 'failed-search' ? 'feature_search_failed' : 'no_issue_published',
+    });
+    assert.equal(searches, scenario === 'no-search' ? 0 : 1);
+    assert.equal(posts, 0);
+  });
+}
 
 for (const found of [true, false]) {
   test(`recovers a crashed create without another POST (marker ${found ? 'present' : 'absent'})`, async (t) => {
@@ -135,8 +199,8 @@ for (const check of ['request', 'draft']) {
     const intake = openIntake({
       directory: dir,
       ...fakeModel(() => { calls++; return createDraft(); }),
-      issues: { create: () => { posts++; return issue; } },
-      scan: () => { if (++scans === (check === 'request' ? 1 : 2)) throw new Error('test finding'); },
+      issues: { search: () => [], create: () => { posts++; return issue; } },
+      scan: () => { if (++scans === (check === 'request' ? 1 : 3)) throw new Error('test finding'); },
     });
     t.after(() => intake.close());
     const { id } = intake.submit('feature-1', 'Skip some tasks');

@@ -1,10 +1,12 @@
 # Floe intake
 
 A maintainer-only HTTP service that turns one feature request into a public
-issue in `ipdelete/floe`. It uses Pi Durable 1.6.0 with one tool,
-`create_feature_issue`. The agent drafts the title and description; the tool
-owns the destination, credentials, and session reference. No filesystem or
-shell tools are exposed to the agent. This is not a Floe runtime dependency.
+issue in `ipdelete/floe`. It uses Pi Durable 1.6.0 with two tools:
+`search_features` looks for likely matches among open and closed issues, and
+`create_feature_issue` publishes the draft only after the agent has received
+search results in a prior turn. The service owns the destination, credentials,
+and session reference. No filesystem or shell tools are exposed to the agent.
+This is not a Floe runtime dependency.
 
 ## Run locally
 
@@ -50,9 +52,17 @@ curl -sS -H "Authorization: Bearer $INTAKE_TOKEN" \
 `POST /intake` accepts a nonblank request of at most 1,000 Unicode code points
 in a JSON body of up to 8 KiB. It returns `202` with an ID and a `Location` header. Retrying with the same key and request
 returns the same job; different text with that key returns `409`. Status is
-`queued`, `running`, `completed` (with the verified issue number and URL), or
-`blocked`. The opaque ID on the issue corresponds to `<id>.sqlite` locally;
-it is not a link to the raw transcript. Intake does not start Requirements.
+`queued`, `running`, `completed` (a new issue), `duplicate` (an existing
+issue covering the same behavior), or `blocked`. Both issue outcomes return
+`issue_number` and `issue_url`. An uncertain match blocks with reason
+`possible_duplicate` and includes `matches` for the maintainer to review.
+An unsuccessful or incomplete GitHub search blocks with `feature_search_failed`.
+
+Search reduces duplicate feature requests but can't rule them out: it is
+keyword-based, returns a bounded set of candidates, and GitHub's search index
+can lag. Repeating an idempotency key is a separate protection against posting
+twice. The opaque ID on a newly created issue corresponds to `<id>.sqlite`
+locally; it is not a link to the raw transcript. Intake does not start Requirements.
 
 ## Recovery and privacy
 
@@ -64,8 +74,8 @@ the session marker (including closed issues). If it still cannot confirm,
 same key never sends a second create; use a new key only after confirming the
 issue does not exist. Keep the state directory to preserve that guarantee.
 
-The request is scanned before it goes to the model provider, and the draft is
-scanned before it goes to GitHub. A finding, missing scanner, or scanner error
+The request is scanned before it goes to the model provider. Search queries
+and issue drafts are scanned before they go to GitHub. A finding, missing scanner, or scanner error
 blocks the job (`secret_scan_failed`); no finding details are returned. This is
 not a general privacy filter: submit only text appropriate for a public issue
 after drafting. `no_issue_published` means the agent or session did not produce
