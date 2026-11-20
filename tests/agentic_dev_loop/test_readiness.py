@@ -62,7 +62,8 @@ def feature(*, designs=None, spikes=None, stories=None, **changes):
     })
     if "backlog" in changes:
         changes["backlogs"] = (*changes.pop("backlogs", ()), changes.pop("backlog"))
-    return replace(FeatureEvidence(tree, {**spikes, **designs, **stories}, OPEN, False, False), **changes)
+    value = FeatureEvidence(tree, {**spikes, **designs, **stories}, OPEN, False, False, revision_requests=())
+    return replace(value, **changes)
 
 
 def story(*, sha=FIRST, **changes):

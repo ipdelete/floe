@@ -78,6 +78,55 @@ uv run pytest -q tests/agentic_dev_loop/test_github_writes.py
 These tests use normalized fixture evidence only. They do not prove live
 search completeness, endpoint race behavior or GitHub mutation semantics.
 
+## Role handoffs
+
+```sh
+uv run pytest -q tests/agentic_dev_loop/test_handoffs.py
+```
+
+Pass issue artifacts to the next role, not the previous role's conversation.
+`handoffs.role_input()` binds a readiness offer to the feature, actual target
+issue, role, attempt and exact approved design where applicable. Use the same
+configured feature slug throughout. Attempt 1 uses the unsuffixed names; a
+retry adds its attempt number to the branch, session and private worktree name.
+Worktree allocation, ownership, GitHub writes and actual admission remain
+separate operations.
+
+| Role | Read | Hand off |
+| --- | --- | --- |
+| Intake | Maintainer's requirements and decision seed | Put both on the feature issue (`enhancement`). Link actual spike and design sub-issues and record the named Intake session and requirements comment with `intake_note()`. |
+| Spike | One linked question and its designated design issue | Link the attempt's branch in Development. Verify the pinned commit is reachable from that retained branch, then record `spike_delivery()` on the design issue before closing the spike. No merge PR. |
+| Designer | Intake requirements, spike pins and the previous approval for a revision | Open the design PR against `master` to close only its linked design issue. Leave approval to the maintainer; a revision uses a new design issue and PR. |
+| Planner | The canonical ADR at the verified maintainer squash SHA, not at current `master` or in a worktree | Inventory story markers and actual child edges. Reuse an exact matching issue, verify acceptance checks and prerequisite links, and publish the backlog only after rereading the current revision bindings and explicit dispositions. |
+| Builder | One linked story, exact approval, and one private worktree and branch per admitted attempt | Test first, then link the story PR to the attempt and include exact-candidate evidence. On a design contradiction, record `revision_request()` on the story rather than editing the ADR in a story PR. |
+| Archivist | The current backlog and retained issue, session, PR and commit links | Reconcile an index of safe IDs and prepare closeout privately. Publication is a separate gate; no transcript is a handoff. |
+
+For phase sessions, `issue_note()` takes a reservation from the launcher and an
+expected attempt key bound to the issue's stable GitHub IDs by the caller. It
+renders only public identities and canonical session/run UUIDs. A matching
+Development link or a note cannot reserve a slot or attest to liveness. Do not
+include local paths, private session locators, raw logs or tool output; any
+requirements, acceptance checks or explanations are purpose-written prose.
+
+Use a feature-scoped marker for each `StorySpec.key`, stable across revisions.
+`reconcile_plan()` requires complete marker reads (including unlinked matches)
+and a fresh verified approval. An unlinked or conflicting match blocks instead
+of requesting another issue; recover prior writes through the writer. New issue
+and rebind suggestions are not writes. A previous backlog must be reconciled,
+including explicit disposition of any unlinked story. Fixture adapters must
+supply `FeatureEvidence.revision_requests` explicitly: a complete trusted
+history, `()` for verified absence, or `None` for an unknown read. A request
+against the current approval stops Builder offers and story merge eligibility.
+Link a new design child to route the request to Designer. A subsequent verified
+approval still needs a reconciled backlog before either can resume.
+
+Use `pr_body()` for the child-only `Closes` and nonclosing feature `Refs` header.
+Verify actual closing links, the recorded same-repo head name and the pinned
+story approval or design predecessor with `pr_trace()`, not a branch URL. Use `valid_work_commit()` on work commits and
+again on the squash message. Keep the issue → PR → squash link and the spike
+commit pin independently of topic branch links. Fixtures exercise these routes
+with local Git refs; hosted closure and deployment are not tested here.
+
 ## Design PR refusal fixture
 
 ```sh
