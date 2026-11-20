@@ -3,6 +3,14 @@
 "Build the happy path. Anything beyond the requested behavior is a proposal, not part of this
  change." -- Ian Philpot
 
+## Suggestions and rules
+
+- Suggestions are defaults, followed with judgment. They live in AGENTS.md and get broken when there's a reason. Most
+  guidance belongs here: readable code, module separation, keeping the library free of UI work, test style.
+- Rules are rare: only things where breaking them actually breaks something, or where you've said "never". Those get
+  enforced mechanically by a test, a git hook or a pi hook, not by prose.
+- Tests check behavior. The runner runs them, and that's the check. A test doesn't need its own validation ceremony.
+
 ## Code readability
 
 - Put the main steps in the order they happen. A reader should be able to
@@ -23,25 +31,23 @@ Task retries are bounded and opt-in; task execution is sequential. Read [README.
 feature.
 
 - Use Python 3.14+ and `uv`. Deployed services retain the installing interpreter
-  environment, including Floe and Tenacity. Planning requires `systemd-analyze`.
-- Tenacity is the sole approved third-party runtime dependency, confined to the
-  retry mechanism. Document external executables separately and report missing tools clearly.
-- `src/floe/` owns logic and data. It must not print, prompt, exit, parse CLI
-  arguments, or import a UI. Return structured data or raise structured errors;
-  use the `FloeError` hierarchy for intentional library errors.
-- `src/floe_cli/` owns arguments, presentation, stdout/stderr routing, and exit
-  codes. Interfaces and examples use only exports in `floe.__all__`.
-- Keep rendering, file operations, service-manager calls, and journal access
-  separate.
+  environment, including Floe and its dependencies. Planning requires `systemd-analyze`.
+- Use the project's dependencies wherever they help.
+  Document external executables separately and report missing tools clearly.
+- Business logic goes in the library, `src/floe/`; the UIs hold UI logic, not
+  business logic. The library returns structured data or raises `FloeError`s
+  rather than printing, prompting, exiting, or parsing arguments, and it doesn't
+  import a UI.
+- `src/floe_cli/` handles arguments, presentation, stdout/stderr routing, and exit
+  codes. Interfaces and examples use what `floe.__all__` exports.
+- Rendering, file operations, service-manager calls, and journal access each have
+  their own module. Keep it that way while it keeps the code readable; don't add
+  layers just to enforce it.
 
 ## Releases
 
 When asked to prepare or publish a release, follow [Releases](docs/releases.md)
 for versioning, tags, validation, and maintainer approval.
-
-For packaging or service-command changes, build a wheel and validate a clean
-installation outside the checkout, including the console entry point and
-exact generated interpreter command.
 
 ## Testing and validation
 
