@@ -50,6 +50,10 @@ the latest commit, then authorized squash merge and safe branch cleanup. Skills
 and passing CI never authorize real-systemd tests or replace human architectural
 approval.
 
+The [feature intake service](../tools/intake/README.md) is a standalone local
+maintainer tool. It starts a Pi Durable session from an HTTP request and publishes
+a feature issue. It does not install with Floe or start later workflow stages.
+
 ## Continuous integration
 
 [CI](../.github/workflows/ci.yml) runs on PRs and pushes to `master`. It uses
