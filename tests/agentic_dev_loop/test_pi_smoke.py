@@ -75,7 +75,7 @@ def test_worker_runs_fixed_persistent_command_once(monkeypatch, tmp_path):
         assert kwargs["stderr"] == subprocess.DEVNULL
         assert not {"GH_TOKEN", "SSH_AUTH_SOCK"} & kwargs["env"].keys()
         native(sessions, session_id)
-        kwargs["stdout"].write(probe.REPLY.encode())
+        assert kwargs["stdout"] == subprocess.DEVNULL
         return subprocess.CompletedProcess(argv, 0)
 
     monkeypatch.setattr(probe.subprocess, "run", fake_run)
@@ -91,10 +91,17 @@ def test_worker_runs_fixed_persistent_command_once(monkeypatch, tmp_path):
     assert settings["retry"]["enabled"] is False
 
 
-def native(directory, session_id, *, embedded=None):
+def native(directory, session_id, *, embedded=None, reply=probe.REPLY, model="gpt-6.2-sol", stop="stop"):
     path = directory / f"2026-01-01T10-00-00_{session_id}.jsonl"
-    path.write_text(json.dumps({"type": "session", "id": embedded or session_id, "cwd": "/work"}) + "\n"
-                    + json.dumps({"type": "session_info", "name": probe.SESSION_NAME}) + "\n")
+    entries = [
+        {"type": "session", "id": embedded or session_id, "cwd": "/work"},
+        {"type": "session_info", "name": probe.SESSION_NAME},
+        {"type": "message", "message": {
+            "role": "assistant", "provider": "github-copilot", "model": model, "stopReason": stop,
+            "content": [{"type": "text", "text": reply}],
+        }},
+    ]
+    path.write_text("".join(json.dumps(entry) + "\n" for entry in entries))
     path.chmod(0o600)
     return path
 
@@ -108,6 +115,14 @@ def test_session_must_match_private_native_file(tmp_path):
     path = native(tmp_path, reserved)
     assert probe.verify_session(tmp_path, reserved)
     path.chmod(0o644)
+    assert not probe.verify_session(tmp_path, reserved)
+
+
+@pytest.mark.parametrize("fields", [{"reply": "wrong"}, {"model": "wrong"}, {"stop": "error"}])
+def test_native_session_must_record_successful_pinned_reply(tmp_path, fields):
+    tmp_path.chmod(0o700)
+    reserved = str(uuid4())
+    native(tmp_path, reserved, **fields)
     assert not probe.verify_session(tmp_path, reserved)
 
 
