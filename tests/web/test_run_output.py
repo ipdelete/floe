@@ -35,8 +35,9 @@ def dashboard(tmp_path):
             process = subprocess.Popen([FLOE, "web", "--port", str(port)], stdout=log, stderr=log)
             try:
                 while time.monotonic() < deadline:
+                    exited = process.poll() is not None
                     output = log_path.read_text()
-                    if process.poll() is not None:
+                    if exited:
                         if "Address already in use" in output:
                             break
                         pytest.fail(f"Dashboard exited during startup:\n{output}")
