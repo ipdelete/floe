@@ -286,11 +286,12 @@ Classification requires complete, candidate-bound pages with verified counts
 and exhaustion, not a list possibly cut short at an endpoint cap.
 
 The broker checks current readiness for the exact story and PR, the approved
-ADR revision, the `master` base and head, nondraft status, clear reviews and
-complete PR-Agent findings disposition. CI, PR-Agent and E2E must come from
-separately configured trusted producers for the same base/head/tested merge SHA
-and revision. E2E must attest to the same CI and PR-Agent runs and verified
-cleanup; the supervised desktop fixture receipt is not accepted. The broker
+ADR revision, the `master` base and head, nondraft status, other GitHub review
+blocks, and [PR-Agent findings disposition](#pr-agent-review-gate). CI and E2E
+must come from separately configured trusted producers and bind the same
+base/head/tested merge SHA and revision. PR-Agent evidence binds the PR and
+head; E2E must attest to that exact review version, the same CI run and verified
+cleanup. The supervised desktop fixture receipt is not accepted. The broker
 reads the gates and classification again before claiming the write. A
 conditional transport must enforce the expected facts *at* the squash, not
 just reread them before sending a request. In particular, a head-only lease
@@ -446,15 +447,63 @@ checkouts that bypass the entry point. Use only authorized fixtures in the
 maintainer's session; production automation still needs a protected deployment
 and the isolation required by the ADR.
 
+## PR-Agent review gate
+
+Run PR-Agent on the final head after fixing relevant findings. The gate reads
+PR-Agent's published review state, not its merge recommendation. A complete
+persistent review must name the exact head. A `RESOLVED` finding needs no
+comment. Check every `ACTIVE` finding in the final review state and post a new
+PR conversation comment from the loop's GitHub login. Use only these lines in
+that comment (no header, code fence, or unrelated prose):
+
+```text
+- 012345abcde0: fixed — restored the candidate check in <commit>
+- 012345abcde1: not applicable — the transport already rejects this case
+```
+
+Use the actual `finding_id` and a nonempty reason or commit note. No comment
+is needed if there are no active findings. The comment must be *created*
+strictly after the current review comment's latest update; editing an earlier
+comment does not count. GitHub times can tie at second precision: in that case
+post a new comment after the review. Repeat this step after a re-review, even on
+the same head. Missing, incomplete, stale, malformed, or ambiguous current review
+evidence blocks rather than falling back to an older passing review.
+
+Standalone PR-Agent markdown is noncanonical: depending on the producer it
+may omit the exact head, completeness, IDs, or inline findings. The fixture
+policy can accept a standalone result only with trusted runner evidence tying
+*all* findings and a complete run on the exact head to that published comment
+version. It still requires a later disposition for every such ID and any active
+IDs in the current-head persistent state. A Builder disposition is not that
+runner evidence. The read-only GitHub command cannot infer it from markdown;
+rerun PR-Agent to obtain a complete persistent review if standalone evidence
+is unavailable.
+
+For supervised merges, check the exact SHA that the intended squash would use:
+
+```sh
+python3.14 -E -s -B -m tools.agentic_dev_loop.pr_agent_review ipdelete/floe "$pr" \
+  --head "$head" --review-author ianphil --loop-author ianphil
+```
+
+Run from the protected tooling snapshot (not the candidate's checkout), with
+trusted `gh` on `PATH`. Use the configured PR-Agent and loop logins; today both
+are the maintainer's login (D-11), not independently secured identities. The
+command reads paginated PR conversation comments and checks the PR head before
+and after. Exit 0 clears **only** the review gate; exit 2 gives the reason to
+hold. It can also inspect a merged PR without modifying GitHub. It does not
+squash, check CI, or replace the broker's conditional write requirements. The
+check is an observation, not an atomic lock on GitHub comments or the PR.
+
 ## Checked E2E fixture attestation
 
 `checked_e2e.validate_fixture()` runs the full live suite through the same lease.
 A trusted supervisor supplies the fixture pin, interpreter, manager context and
 receipt path. Its reader supplies **current** evidence for the exact
-(repo/PR, head SHA, base SHA, tested merge SHA, ADR revision). CI and PR-Agent
-must each report success from the configured producer, with a complete review
-whose findings are all fixed or explained. Producer identities are facts from
-an authenticated reader, not visible check names, PR comments or candidate
+(repo/PR, head SHA, base SHA, tested merge SHA, ADR revision). CI must report
+success, and the same [PR-Agent gate](#pr-agent-review-gate) used for story
+merges must pass. The reader supplies authenticated producer and comment-author
+metadata, not visible usernames from comment text, check names or candidate
 files. Missing evidence, a draft/closed candidate or unknown/pending redesign
 blocks the run. The supervisor checks evidence again at launch and after cleanup;
 these observations are not an atomic check against external changes.

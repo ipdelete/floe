@@ -1,4 +1,5 @@
 from dataclasses import asdict, replace
+from datetime import UTC, datetime, timedelta
 import json
 from pathlib import Path
 import subprocess
@@ -8,10 +9,23 @@ import pytest
 
 from tools.agentic_dev_loop import checked_e2e as checked, live_e2e
 from tools.agentic_dev_loop.feature_tree import IssueRef
+from tools.agentic_dev_loop.pr_agent_review import Comment, ReviewEvidence, require_review
 
 
 REAL_SUITE = live_e2e._run_suite
 FIXTURE_TEST = 'import pytest\n@pytest.mark.systemd_e2e\ndef test_fixture():\n    assert True\n'
+REVIEW_TIME = datetime(2026, 11, 20, tzinfo=UTC)
+
+
+def review_comment(fixture, *, findings=(), **run):
+    state = {
+        'schema_version': 1,
+        'last_run': {'complete': True, 'head_sha': fixture.binding.head_sha, 'kind': 'full',
+                     'run_id': 'review-1', **run},
+        'findings': list(findings),
+    }
+    return Comment(1, fixture.review_producer, REVIEW_TIME, REVIEW_TIME,
+                   f'<!-- pr-agent-review-state:v1\n{json.dumps(state)}\n-->')
 
 
 @pytest.fixture
@@ -38,10 +52,10 @@ def pytest_addoption(parser):
             (checkout / path.name).write_bytes(path.read_bytes())
     binding = checked.Binding(IssueRef('fixture/floe', 42), 'a' * 40, 'b' * 40,
                               git('rev-parse', 'HEAD'), 'd' * 40)
-    fixture = checked.Fixture(binding, repo, checkout, Path(sys.executable), 'protected-ci', 'protected-review')
+    fixture = checked.Fixture(binding, repo, checkout, Path(sys.executable),
+                              'protected-ci', 'protected-review', 'loop-author')
     ci = checked.Check(binding, 'protected-ci', 'ci-1', 'success')
-    review = checked.Review(checked.Check(binding, 'protected-review', 'review-1', 'success'),
-                            (checked.Disposition.FIXED, checked.Disposition.EXPLAINED))
+    review = ReviewEvidence(binding.pr, (review_comment(fixture),))
     evidence = checked.Evidence(binding, True, False, ci, review)
     target = live_e2e.Target(tmp_path / 'home', tmp_path / 'runtime')
     receipt = tmp_path / 'receipt.json'
@@ -98,7 +112,9 @@ def test_exact_success_is_recorded_after_locked_cleanup(rig, monkeypatch):
     assert attestation.matches(fixture.binding)
     assert json.loads(receipt.read_text()) == {
         'kind': 'supervised-fixture-e2e', 'binding': asdict(fixture.binding),
-        'ci_run': 'ci-1', 'review_run': 'review-1',
+        'ci_run': 'ci-1',
+        'review_run': require_review(evidence.review, fixture.binding.pr, fixture.binding.head_sha,
+                                     fixture.review_producer, fixture.loop_author).run_id,
     }
     assert receipt.stat().st_mode & 0o777 == 0o600
     for field in ('pr', 'head_sha', 'base_sha', 'merge_sha', 'adr_revision'):
@@ -116,12 +132,15 @@ def test_exact_success_is_recorded_after_locked_cleanup(rig, monkeypatch):
 def test_unverified_evidence_never_starts_e2e(rig, fault):
     target, fixture, e, receipt, trace = rig
     stale = replace(e.binding, base_sha='e' * 40)
-    old_review = replace(e.review.check, binding=stale)
+    review = e.review.comments[0]
+
+    def with_review(comment):
+        return replace(e, review=ReviewEvidence(fixture.binding.pr, (comment,)))
+
     if fault == 'unknown-commit':
         expected = replace(e.binding, merge_sha='f' * 40)
         fixture = replace(fixture, binding=expected)
-        e = replace(e, binding=expected, ci=replace(e.ci, binding=expected),
-                    review=replace(e.review, check=replace(e.review.check, binding=expected)))
+        e = replace(e, binding=expected, ci=replace(e.ci, binding=expected))
     else:
         e = {
             'missing': None,
@@ -132,13 +151,13 @@ def test_unverified_evidence_never_starts_e2e(rig, fault):
             'missing-ci': replace(e, ci=None),
             'missing-review': replace(e, review=None),
             'pending-ci': replace(e, ci=replace(e.ci, status='pending')),
-            'pending-review': replace(e, review=replace(e.review, check=replace(e.review.check, status='pending'))),
+            'pending-review': with_review(review_comment(fixture, complete=False, kind='partial')),
             'stale-ci': replace(e, ci=replace(e.ci, binding=stale)),
-            'stale-review': replace(e, review=replace(e.review, check=old_review)),
+            'stale-review': with_review(review_comment(fixture, head_sha='e' * 40)),
             'spoofed-ci': replace(e, ci=replace(e.ci, producer='candidate-ci')),
-            'spoofed-review': replace(e, review=replace(e.review, check=replace(e.review.check, producer='PR-Agent'))),
-            'unknown-findings': replace(e, review=replace(e.review, findings=None)),
-            'pending-finding': replace(e, review=replace(e.review, findings=('pending',))),
+            'spoofed-review': with_review(replace(review, author='PR-Agent')),
+            'unknown-findings': with_review(replace(review, body=review.body.replace('[]', 'null'))),
+            'pending-finding': with_review(review_comment(fixture, findings=('pending',))),
         }[fault]
     with pytest.raises(live_e2e.Blocked):
         checked.validate_fixture(target, fixture, lambda _: e, receipt)
@@ -202,6 +221,38 @@ def test_no_attestation_for_wrong_checkout_or_unclean_run(rig, monkeypatch, faul
     else:
         assert trace.count('suite') == 1
     assert target.dirty.exists() == (fault in ('replaced-before-launch', 'test-failed', 'interrupted', 'cleanup'))
+
+
+def test_active_pr_agent_finding_blocks_before_suite(rig):
+    target, fixture, evidence, receipt, trace = rig
+    review = review_comment(fixture, findings=({'finding_id': 'abc', 'state': 'ACTIVE',
+                                                'path': 'foo.py', 'body': 'Possible issue'},))
+    pending = replace(evidence, review=ReviewEvidence(fixture.binding.pr, (review,)))
+    with pytest.raises(live_e2e.Blocked, match='abc'):
+        checked.validate_fixture(target, fixture, lambda _: pending, receipt)
+    assert trace == [] and not receipt.exists()
+
+    later = REVIEW_TIME + timedelta(seconds=2)
+    disposition = Comment(2, fixture.loop_author, later, later, '- abc: fixed — restored the check')
+    clear = replace(evidence, review=ReviewEvidence(fixture.binding.pr, (review, disposition)))
+    attestation = checked.validate_fixture(target, fixture, lambda _: clear, receipt)
+    assert attestation.review_run == require_review(clear.review, fixture.binding.pr, fixture.binding.head_sha,
+                                                    fixture.review_producer, fixture.loop_author).run_id
+    assert trace == ['audit', 'suite', 'audit'] and receipt.is_file()
+
+
+def test_same_head_review_update_during_suite_prevents_receipt(rig):
+    target, fixture, evidence, receipt, trace = rig
+    updated = replace(evidence.review.comments[0], updated_at=REVIEW_TIME + timedelta(seconds=1))
+
+    def read(_):
+        if 'suite' in trace:
+            return replace(evidence, review=replace(evidence.review, comments=(updated,)))
+        return evidence
+
+    with pytest.raises(live_e2e.Blocked, match='review evidence changed'):
+        checked.validate_fixture(target, fixture, read, receipt)
+    assert trace == ['audit', 'suite', 'audit'] and not receipt.exists()
 
 
 def test_redesign_becoming_pending_during_initial_audit_blocks_launch(rig):

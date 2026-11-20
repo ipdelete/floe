@@ -6,10 +6,11 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Protocol
 
-from .checked_e2e import Binding, Check, Evidence, check_passed, review_passed, valid_binding
+from .checked_e2e import Binding, Check, Evidence, check_passed, valid_binding
 from .feature_tree import EvidenceReadError, IssueRef, valid_issue_ref
 from .github_writes import WriterBusy, locked_writer, request_fingerprint
 from .merge import Candidate, CandidateReader, ChangedPath, ClassifiedStory, ClosingIssue, DesignProtection, classify
+from .pr_agent_review import ReviewBlocked, require_review
 from .readiness import (
     FeatureEvidence, IssueState, Policy, PullRequestState, RevisionRequest, StoryMergeCandidate, decide_feature, valid_sha,
 )
@@ -27,7 +28,7 @@ class MergePolicy:
     readiness: Policy
     design_issues: frozenset[IssueRef]
     ci_producer: str
-    review_producer: str
+    review_producer: str  # GitHub login used by PR-Agent
     e2e_producer: str
 
 
@@ -44,7 +45,7 @@ class GateEvidence:
     feature: IssueRef
     feature_evidence: FeatureEvidence
     checks: Evidence
-    review_clear: bool | None  # current candidate has no outstanding review blocks
+    review_clear: bool | None  # other GitHub review blocks, not PR-Agent dispositions
     e2e: E2EResult | None
 
 
@@ -82,7 +83,7 @@ class StoryReader(CandidateReader, Protocol):
     """Trusted, bounded reads; unverifiable or incomplete evidence raises EvidenceReadError."""
 
     def gates(self, request: StoryRequest) -> GateEvidence:
-        """Authenticate producers, candidate-bound review state and current inventories."""
+        """Authenticate producers and supply complete current PR comment metadata."""
         ...
 
     def story_state(self, pr: IssueRef, story: IssueRef) -> StoryState:
@@ -125,6 +126,7 @@ class Outcome(StrEnum):
 class Result:
     outcome: Outcome
     squash_sha: str | None = None
+    reason: str | None = None
 
 
 def _gate_passes(request: StoryRequest, policy: MergePolicy, gates: GateEvidence) -> bool:
@@ -139,13 +141,14 @@ def _gate_passes(request: StoryRequest, policy: MergePolicy, gates: GateEvidence
     checks = gates.checks
     if (not isinstance(checks, Evidence) or checks.binding != binding
             or checks.open_nondraft is not True or checks.redesign_pending is not False
-            or not check_passed(checks.ci, binding, policy.ci_producer)
-            or not review_passed(checks.review, binding, policy.review_producer)):
+            or not check_passed(checks.ci, binding, policy.ci_producer)):
         return False
+    review = require_review(checks.review, binding.pr, binding.head_sha,
+                            policy.review_producer, policy.readiness.maintainer)
     e2e = gates.e2e
     return (isinstance(e2e, E2EResult) and check_passed(e2e.check, binding, policy.e2e_producer)
             and e2e.cleanup_verified is True and e2e.ci_run == checks.ci.run_id
-            and e2e.review_run == checks.review.check.run_id)
+            and e2e.review_run == review.run_id)
 
 
 def _valid_target(feature: IssueRef, story: IssueRef) -> bool:
@@ -181,6 +184,8 @@ class MergeBroker:
                 return self._reconcile(conn, request)
         except WriterBusy:
             return Result(Outcome.BUSY)
+        except ReviewBlocked as exc:
+            return Result(Outcome.BLOCKED, reason=str(exc))
         except (EvidenceReadError, OSError, sqlite3.Error):
             return Result(Outcome.UNKNOWN)
 
