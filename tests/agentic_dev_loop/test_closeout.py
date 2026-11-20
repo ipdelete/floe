@@ -1,6 +1,7 @@
 import json
 import subprocess
 from dataclasses import replace
+from pathlib import Path
 from stat import S_IMODE
 
 import pytest
@@ -45,7 +46,9 @@ def inputs(tmp_path):
         closeout_active=True,  # admission isn't available again while closeout is in progress
     )
     draft = CloseoutDraft(FEATURE, SLUG, SECOND, ARCHIVIST_ID, SUMMARY)
-    return root, snapshot, draft, (builder, archivist)
+    yield root, snapshot, draft, (builder, archivist)
+    for directory in root.iterdir():
+        directory.chmod(0o700)
 
 
 def freeze(inputs):
@@ -143,6 +146,7 @@ def test_handoff_only_after_all_listed_sessions_finish_without_launch_or_push(in
     for candidate, sessions in (
         (replace(draft, archivist_id=None), (builder, archivist)),
         (draft, (builder,)),
+        (replace(draft, archivist_id=BUILDER_ID), (builder, archivist)),
         (draft, (builder, replace(archivist, finished=False))),
         (draft, (replace(builder, finished=False), archivist)),
     ):
@@ -157,6 +161,21 @@ def test_handoff_only_after_all_listed_sessions_finish_without_launch_or_push(in
     with pytest.raises(CloseoutBlocked):
         freeze((root, snapshot, draft, (builder, replace(archivist, allow_missing=True))))
     assert frozen.index == original == (frozen.directory / "index.json").read_bytes()
+
+
+def test_failed_finalization_does_not_leave_a_read_only_partial_candidate(inputs, monkeypatch):
+    chmod = Path.chmod
+
+    def fail_finalization(path, mode):
+        chmod(path, mode)
+        if mode == 0o500:
+            raise OSError("injected failure while finalizing staged files")
+
+    monkeypatch.setattr(Path, "chmod", fail_finalization)
+    with pytest.raises(CloseoutBlocked):
+        freeze(inputs)
+    root, _, _, _ = inputs
+    assert not list(root.iterdir())
 
 
 def test_unsafe_staging_root_is_refused(inputs):

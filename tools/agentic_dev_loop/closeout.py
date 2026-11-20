@@ -165,6 +165,10 @@ def _write_candidate(root: Path, tag: str, index: bytes, summary: bytes) -> Froz
     except OSError:
         if directory is not None:
             try:
+                directory.chmod(0o700)
+            except OSError:
+                pass  # Still try removing the failed stage.
+            try:
                 shutil.rmtree(directory)
             except OSError:
                 raise CloseoutBlocked("private staging failed and cleanup is unverified") from None
