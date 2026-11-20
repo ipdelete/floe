@@ -343,6 +343,47 @@ def test_global_deadline_stops_further_calls_even_after_a_late_success(setup):
     issues.read_faults[slow.feature] = stall
     issues.read_faults[READY.feature] = late_success
     results = tick.reconcile([slow, READY, scope(103)])
-    assert [result.outcome for result in results] == [Outcome.UNAVAILABLE, Outcome.UNAVAILABLE]
+    assert [result.outcome for result in results] == [Outcome.UNAVAILABLE, Outcome.DEADLINE]
     assert issues.calls == [("read", slow.feature, 102), ("read", READY.feature, 103)]
     assert not admission.calls and not manager.starts
+
+
+def test_late_admission_keeps_known_ids_but_does_not_start_writeback(setup):
+    new_tick, issues, manager, clock = setup
+    tick, admission = new_tick(call_seconds=2)
+
+    def late_admission(_):
+        clock.now = 103  # beyond the call deadline but inside the tick budget
+
+    admission.after_admission = late_admission
+    [result] = tick.reconcile([READY])
+    assert result.outcome is Outcome.DEADLINE
+    assert result.reservation == manager.starts[0]
+    assert [kind for kind, _, _ in issues.calls] == ["read"]
+
+
+def test_late_writeback_reports_the_confirmed_result(setup):
+    new_tick, issues, manager, clock = setup
+    tick, _ = new_tick(call_seconds=2)
+
+    def late_write():
+        clock.now = 103
+
+    issues.after_write = late_write
+    [result] = tick.reconcile([READY])
+    assert result.outcome is Outcome.MIRRORED
+    assert issues.notes == {ISSUE: RunNote(manager.starts[0])}
+
+
+def test_transport_os_error_does_not_abort_independent_feature(setup):
+    new_tick, issues, manager, _ = setup
+    broken = scope(102, read_bucket="broken")
+    tick, _ = new_tick()
+
+    def disconnected(_):
+        raise ConnectionError
+
+    issues.read_faults[broken.feature] = disconnected
+    results = tick.reconcile([broken, READY])
+    assert [result.outcome for result in results] == [Outcome.UNAVAILABLE, Outcome.MIRRORED]
+    assert issues.notes == {ISSUE: RunNote(manager.starts[0])}

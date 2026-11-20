@@ -189,7 +189,11 @@ class Tick:
     def workflow(
         self, scopes: Iterable[FeatureScope], report: Callable[[tuple[FeatureResult, ...]], object],
     ) -> Workflow:
-        """Build a run-only Floe workflow. The report sink is local and nonblocking."""
+        """Snapshot a batch for a run-only workflow and a local, nonblocking report sink.
+
+        Repeated runs check fresh evidence for the same scopes. Build a new
+        workflow to select a different batch.
+        """
         batch = tuple(islice(scopes, self._limits.batch_size))
 
         def reconcile() -> None:
@@ -215,24 +219,31 @@ class Tick:
             raise _Deferred(Outcome.BACKOFF)
         return now
 
-    def _call[T](self, bucket: str, deadline: float, operation: Callable[..., T], *args: object) -> T:
+    def _call[T](
+        self, bucket: str, deadline: float, operation: Callable[..., T], *args: object,
+    ) -> tuple[T, bool]:
+        """Return the reply and whether it arrived in time to act on it."""
         until = min(deadline, self._available(bucket, deadline) + self._limits.call_seconds)
         try:
             result = operation(*args, deadline=until)
-            if self._clock() >= until:
-                raise TimeoutError
-            return result
-        except (EndpointUnavailable, TimeoutError, EvidenceReadError, LedgerUnavailable, WorkerUnavailable) as exc:
+        except (EndpointUnavailable, OSError, EvidenceReadError, LedgerUnavailable, WorkerUnavailable) as exc:
             resume = self._clock() + self._limits.backoff_seconds
             if isinstance(exc, EndpointUnavailable) and exc.retry_at is not None:
                 resume = max(resume, exc.retry_at)
             self._cooldowns.defer(bucket, resume)
             raise _Deferred(Outcome.UNAVAILABLE) from exc
+        now = self._clock()
+        if now >= until:
+            self._cooldowns.defer(bucket, now + self._limits.backoff_seconds)
+            return result, False
+        return result, True
 
     def _reconcile_feature(self, scope: FeatureScope, deadline: float) -> FeatureResult:
         decision = reservation = None
         try:
-            observation = self._call(scope.read_bucket, deadline, self._issues.read, scope)
+            observation, timely = self._call(scope.read_bucket, deadline, self._issues.read, scope)
+            if not timely:
+                return FeatureResult(scope.feature, Outcome.DEADLINE)
             decision = decide_feature(scope.feature, scope.policy, observation.evidence)
             work = decision.work
             if work is None:
@@ -247,14 +258,23 @@ class Tick:
             self._available(scope.write_bucket, deadline)
             key = AttemptKey(scope.repo_id, scope.feature_id, data.issue_id, work.role, 1)
             request = StartRequest(key, work.approval.sha if work.approval else None, data.snapshot)
-            reply = self._call(self._launcher.bucket, deadline, self._launcher.start_or_get, request)
+            reply, timely = self._call(self._launcher.bucket, deadline, self._launcher.start_or_get, request)
             if not isinstance(reply, Reservation) or reply.key != key:
                 return FeatureResult(scope.feature, Outcome.ADMISSION_REFUSED, decision)
             reservation = reply
+            if not timely:
+                return FeatureResult(scope.feature, Outcome.DEADLINE, decision, reservation)
             issue = IssueRef(scope.feature.repo, work.issue)
-            written = self._call(scope.write_bucket, deadline, self._issues.mirror_if_missing,
-                                 issue, RunNote(reservation))
-            outcome = Outcome.MIRRORED if written else Outcome.NOTE_PRESENT
+            # This is the last operation: report a confirmed result even if the
+            # reply was late. A lost or ambiguous receipt remains UNAVAILABLE.
+            written, _ = self._call(scope.write_bucket, deadline, self._issues.mirror_if_missing,
+                                    issue, RunNote(reservation))
+            if written is True:
+                outcome = Outcome.MIRRORED
+            elif written is False:
+                outcome = Outcome.NOTE_PRESENT
+            else:
+                outcome = Outcome.UNAVAILABLE
         except _Deferred as exc:
             outcome = exc.outcome
         except AdmissionError:
