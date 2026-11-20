@@ -1,8 +1,8 @@
-"""Check the small tag/version/notes gate embedded in the Actions workflow."""
+"""Check the release tag, version, and notes gate used by CI."""
 
 import os
 import subprocess
-import textwrap
+import sys
 from pathlib import Path
 
 import pytest
@@ -12,9 +12,7 @@ ROOT = Path(__file__).parents[1]
 
 @pytest.fixture
 def release_check(tmp_path):
-    workflow = (ROOT / ".github/workflows/ci.yml").read_text()
-    block = workflow.split("# BEGIN release-version-check\n", 1)[1].split("# END release-version-check", 1)[0]
-    script = textwrap.dedent(block).strip() + "\n"
+    script = ROOT / ".github/scripts/check_release.py"
     runner = tmp_path / "runner"
     runner.mkdir()
 
@@ -25,7 +23,7 @@ def release_check(tmp_path):
         (tmp_path / "CHANGELOG.md").write_text(
             f'## [{tag[1:]}] - 2026-11-18\n\nRelease notes.\n' if changelog is None else changelog)
         return subprocess.run(
-            ["bash", "-euo", "pipefail", "-c", script], cwd=tmp_path,
+            [sys.executable, str(script)], cwd=tmp_path,
             env={**os.environ, "RELEASE_TAG": tag, "RUNNER_TEMP": str(runner),
                  "GITHUB_OUTPUT": str(runner / "outputs")},
             capture_output=True, text=True, timeout=10,
