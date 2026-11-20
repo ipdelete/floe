@@ -44,8 +44,12 @@ class SmokeInputs:
             if (not all(Path(config[field]).is_absolute() for field in ("node", "release"))
                     or not node.is_file() or not (release / "node_modules/.bin/pi").is_file()):
                 raise ValueError
-            # These must be independently provisioned credentials, not aliases.
-            if (directory / "tick-token").read_bytes().strip() == (directory / "worker-token").read_bytes().strip():
+            tick_token = (directory / "tick-token").read_text().strip()
+            worker_token = (directory / "worker-token").read_text().strip()
+            if not tick_token.startswith("github_pat_") or not worker_token or tick_token == worker_token:
+                raise ValueError
+            auth = json.loads((directory / "copilot.json").read_text())
+            if not isinstance(auth, dict) or set(auth) != {"github-copilot"}:
                 raise ValueError
         except (OSError, ValueError, TypeError, KeyError):
             raise WorkerUnavailable("required private smoke provisioning unavailable") from None

@@ -178,6 +178,15 @@ def test_provisioning_fails_closed_without_inputs(tmp_path):
         SmokeInputs.load(tmp_path / "absent")
 
 
+def test_outcome_temporary_file_is_not_followed(tmp_path):
+    unrelated = tmp_path / "unrelated"
+    unrelated.write_text("unchanged")
+    (tmp_path / "outcome.tmp").symlink_to(unrelated)
+    with pytest.raises(FileExistsError):
+        probe.write_outcome(tmp_path, str(uuid4()), str(uuid4()), "ok")
+    assert unrelated.read_text() == "unchanged"
+
+
 def wait_for_collection(manager, reservation, seconds=85):
     unit = manager.unit_name(reservation.run_id)
     deadline = time.monotonic() + seconds

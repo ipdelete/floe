@@ -108,8 +108,8 @@ ambient logins, or copy a whole home or Pi directory:
 
 Use a trusted Pi release supporting the print and session flags (validated CLI
 contract: Pi 1.5.2). The host needs `/usr/bin/python3.14`, `gh`, `git`,
-Bubblewrap with unprivileged user namespaces, cgroup v2, and effective systemd
-socket and syscall restrictions. The two transient services start without a
+`libkeyutils.so.1`, Bubblewrap with unprivileged user namespaces, cgroup v2,
+and effective systemd socket and syscall restrictions. The two transient services start without a
 terminal or shell activation. Each mounts only its explicit role inputs;
 neither gets the host home, runtime directory, inherited environment or access
 to the Unix sockets or kernel keyring. The live probes check these conditions

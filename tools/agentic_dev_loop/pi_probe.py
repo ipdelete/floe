@@ -167,7 +167,8 @@ FAILURES = frozenset({
 
 def write_outcome(output, run_id, session_id, outcome):
     temporary = output / "outcome.tmp"
-    temporary.write_text(json.dumps({"run_id": run_id, "session_id": session_id, "outcome": outcome}))
+    with temporary.open("x") as stream:
+        json.dump({"run_id": run_id, "session_id": session_id, "outcome": outcome}, stream)
     temporary.replace(output / "outcome.json")
 
 
