@@ -6,9 +6,9 @@ import { githubIssues } from './github.js';
 import { intakeServer } from './http.js';
 import { openIntake } from './intake.js';
 
-const { INTAKE_TOKEN, GITHUB_TOKEN, INTAKE_MODEL, PI_PROVIDER, PI_MODEL } = process.env;
-if (!INTAKE_TOKEN || INTAKE_TOKEN.length < 32 || !GITHUB_TOKEN) {
-  throw new Error('Set INTAKE_TOKEN (at least 32 characters) and GITHUB_TOKEN');
+const { INTAKE_TOKEN, INTAKE_MODEL, PI_PROVIDER, PI_MODEL } = process.env;
+if (!INTAKE_TOKEN || INTAKE_TOKEN.length < 32) {
+  throw new Error('Set INTAKE_TOKEN (at least 32 characters)');
 }
 const port = Number(process.env.INTAKE_PORT ?? 8765);
 if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('Invalid INTAKE_PORT');
@@ -37,7 +37,7 @@ if (!(await models.getAvailable(provider)).some((model) => model.id === modelId)
   throw new Error(`${provider}/${modelId} is unavailable; check Pi's /login and /model`);
 }
 const intake = openIntake({
-  directory, models, model: { provider, modelId }, issues: githubIssues(GITHUB_TOKEN), scan,
+  directory, models, model: { provider, modelId }, issues: githubIssues(), scan,
 });
 intakeServer(intake, INTAKE_TOKEN).listen(port, '127.0.0.1', () => {
   console.log(`Floe intake listening at http://127.0.0.1:${port}/intake`);

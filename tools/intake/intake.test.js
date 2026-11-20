@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { once } from 'node:events';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { get } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -26,6 +26,26 @@ async function waitForJob(readStatus) {
   }
   assert.fail('Intake did not settle');
 }
+
+test('uses gh credentials unless an issue token is explicitly configured', async (t) => {
+  const dir = await directory(t);
+  await writeFile(join(dir, 'gh'), `#!/bin/sh
+[ "$*" = 'auth token --hostname github.com' ] || exit 1
+printf 'test-cli-token\\n'
+`, { mode: 0o700 });
+  const probe = spawnSync(process.execPath, ['--input-type=module', '-e', `
+    import { githubIssues } from './github.js';
+    const request = async (_url, options) => {
+      console.log(options.headers.authorization);
+      return Response.json([]);
+    };
+    await githubIssues(undefined, request).find('test');
+    process.env.GITHUB_TOKEN = 'test-explicit-token';
+    await githubIssues(undefined, request).find('test');
+  `], { cwd: new URL('.', import.meta.url), env: { PATH: dir }, encoding: 'utf8', timeout: 5000 });
+  assert.equal(probe.status, 0, probe.stderr);
+  assert.equal(probe.stdout, 'Bearer test-cli-token\nBearer test-explicit-token\n');
+});
 
 test('authenticated HTTP intake persists one job and offers only the issue tool', async (t) => {
   const dir = await directory(t);

@@ -1,3 +1,5 @@
+import { execFileSync } from 'node:child_process';
+
 const repo = 'ipdelete/floe';
 const endpoint = `https://api.github.com/repos/${repo}/issues`;
 
@@ -5,7 +7,20 @@ export function issueMarker(id) {
   return `<!-- floe-intake:${id} -->`;
 }
 
-export function githubIssues(token, fetchIssue = fetch) {
+function tokenFromGh() {
+  try {
+    const token = execFileSync('gh', ['auth', 'token', '--hostname', 'github.com'], {
+      encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 5000,
+      killSignal: 'SIGKILL', maxBuffer: 4096,
+    }).trim();
+    if (token) return token;
+  } catch {
+    // Do not surface subprocess output or credentials.
+  }
+  throw new Error('Run gh auth login --hostname github.com or set GITHUB_TOKEN with Issues read/write access');
+}
+
+export function githubIssues(token = process.env.GITHUB_TOKEN?.trim() || tokenFromGh(), fetchIssue = fetch) {
   function request(url, options = {}) {
     return fetchIssue(url, {
       ...options,

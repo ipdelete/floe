@@ -12,13 +12,16 @@ Requires Node.js 22.19.0 or later, npm, and Gitleaks 8.30.1 on `PATH`. Load thes
 values into the environment before launching (don't put secrets in the repo):
 
 - `INTAKE_TOKEN`: a random bearer token, at least 32 characters.
-- `GITHUB_TOKEN`: a token scoped to `ipdelete/floe` with Issues read/write.
+- For issue access, install GitHub CLI and sign in with `gh auth login --hostname
+  github.com`. Intake obtains the active token at startup. Alternatively set
+  `GITHUB_TOKEN` with Issues read/write access to `ipdelete/floe`; it takes
+  precedence and does not require `gh`.
 
 Intake reuses the local Pi login and cached model catalog. It inherits
 `PI_PROVIDER` and `PI_MODEL` when started from Pi, otherwise it defaults to
 `github-copilot` / `gpt-6.2-sol`. Set `INTAKE_MODEL` to override the model ID.
 If the model is unavailable, check `/login` and `/model` in Pi before starting
-Intake. The issue-writing `GITHUB_TOKEN` is separate from the model login.
+Intake. The issue-writing credential is separate from the model login.
 
 ```sh
 cd tools/intake
