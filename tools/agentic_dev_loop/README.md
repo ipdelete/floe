@@ -291,8 +291,8 @@ files. Missing evidence, a draft/closed candidate or unknown/pending redesign
 blocks the run. The supervisor checks evidence again at launch and after cleanup;
 these observations are not an atomic check against external changes.
 
-Stage the reviewed commit as a plain tree (no `.git`, `.venv` or extra files)
-from a protected Git source. Provision a separate trusted Python environment
+Stage the reviewed SHA-1 Git commit as a plain tree (no `.git`, `.venv` or
+extra files or directories) from a protected Git source. Provision a separate trusted Python environment
 with the fixture's dependencies and a non-editable install of the pinned Floe
 code. The gate checks file bytes and executable bits against the Git tree and
 holds the directory descriptor used as the child's working directory. Symlinks,
@@ -303,11 +303,12 @@ Those paths must be controlled by the supervisor.
 
 For one supervised demonstration, after confirming no legacy run and no
 `floe-e2e-*` units, run **from the separately protected tooling root** (not the
-fixture or a Builder worktree):
+fixture or a Builder worktree). The desktop command accepts only the reviewed
+master snapshot selected for #48:
 
 ```sh
 python3.14 -E -s -B -m tools.agentic_dev_loop.checked_e2e fixture \
-  --repo /path/to/protected/git-repo --pin "$REVIEWED_FIXTURE_SHA" \
+  --repo /path/to/protected/git-repo --pin a2a3c9deb3a8225178382ce5c7c1e649b952daa5 \
   --checkout /path/to/staged-tree --python /path/to/fixture-env/bin/python \
   --receipt /path/to/private-output/new-receipt.json
 ```

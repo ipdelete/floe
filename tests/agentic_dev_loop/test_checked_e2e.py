@@ -241,3 +241,14 @@ def test_unattended_candidate_entry_does_not_exist():
     with pytest.raises(SystemExit) as exc:
         checked.main(['candidate'])
     assert exc.value.code == 2
+
+
+def test_desktop_demo_rejects_non_allowlisted_pin(rig, monkeypatch, capsys):
+    _, fixture, _, receipt, _ = rig
+    monkeypatch.setattr(checked, 'validate_fixture', lambda *args: pytest.fail('must not launch'))
+    args = ['fixture', '--repo', str(fixture.repo), '--checkout', str(fixture.checkout),
+            '--python', str(fixture.python), '--receipt', str(receipt), '--pin', fixture.binding.merge_sha]
+    with pytest.raises(SystemExit) as exc:
+        checked.main(args)
+    assert exc.value.code == 2
+    assert 'reviewed fixture pin' in capsys.readouterr().err

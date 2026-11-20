@@ -18,6 +18,10 @@ from .feature_tree import EvidenceReadError, IssueRef, valid_issue_ref
 from .readiness import valid_sha
 
 
+# Desktop CLI exercises only the reviewed master snapshot selected for #48.
+_DEMO_PIN = 'a2a3c9deb3a8225178382ce5c7c1e649b952daa5'
+
+
 @dataclass(frozen=True)
 class Binding:
     pr: IssueRef
@@ -200,6 +204,7 @@ def validate_fixture(
     and normalizes facts; PR text, check names and local JSON are not such a reader.
     The repo, staged tree, interpreter, supervisor and receipt directory must be
     protected from candidate writes. This is not a same-UID isolation boundary.
+    Policy holds raise Blocked; local filesystem failures can raise OSError.
     """
     if (not _valid_binding(fixture.binding)
             or not all(path.is_absolute() for path in (fixture.repo, fixture.checkout, fixture.python, receipt))
@@ -239,9 +244,11 @@ def main(argv: list[str]) -> int:
     demo = modes.add_parser('fixture', help='run an authorized fixture with synthetic CI and review')
     for name in ('repo', 'checkout', 'python', 'receipt'):
         demo.add_argument(f'--{name}', required=True, type=Path)
-    demo.add_argument('--pin', required=True, help='reviewed fixture commit (full SHA)')
+    demo.add_argument('--pin', required=True, help='confirm the reviewed fixture pin')
     args = parser.parse_args(argv)
-    binding = Binding(IssueRef('fixture/floe', 1), '1' * 40, '2' * 40, args.pin, '3' * 40)
+    if args.pin != _DEMO_PIN:
+        demo.error(f'reviewed fixture pin must be {_DEMO_PIN}')
+    binding = Binding(IssueRef('fixture/floe', 1), '1' * 40, '2' * 40, _DEMO_PIN, '3' * 40)
     fixture = Fixture(binding, args.repo, args.checkout, args.python, 'fixture-ci', 'fixture-review')
     ci = Check(binding, fixture.ci_producer, 'synthetic-ci', 'success')
     review = Review(Check(binding, fixture.review_producer, 'synthetic-review', 'success'), ())
