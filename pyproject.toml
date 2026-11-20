@@ -16,11 +16,6 @@ build-backend = "uv_build"
 [tool.uv.build-backend]
 module-name = ["floe", "floe_cli", "floe_web"]
 
-[tool.pytest.ini_options]
-markers = [
-    "systemd_e2e: opt-in tests deploying generated workflows to the real user systemd and journald",
-]
-
 [dependency-groups]
 dev = [
     "pytest>=9.2.0",
