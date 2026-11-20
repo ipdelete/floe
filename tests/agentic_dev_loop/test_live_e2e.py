@@ -136,6 +136,43 @@ def test_crash_blocks_reuse_until_group_and_manager_are_clean(tmp_path, monkeypa
             group.wait(timeout=8)
 
 
+def check_lease(target, fd, control):
+    os.setsid()
+    assert control.poll(8)
+    assert control.recv() == 'recorded'
+    wrong_fd = os.open(target.lock, os.O_RDONLY)
+    try:
+        os.environ['FLOE_E2E_LEASE_FD'] = str(wrong_fd)
+        with pytest.raises(e2e.Blocked, match='requires a live E2E lease'):
+            e2e.require_lease()
+    finally:
+        os.close(wrong_fd)
+    os.environ['FLOE_E2E_LEASE_FD'] = str(fd)
+    os.set_inheritable(fd, True)
+    e2e.require_lease()
+    assert 'FLOE_E2E_LEASE_FD' not in os.environ
+    assert not os.get_inheritable(fd)
+
+
+def test_guard_requires_the_inherited_lock_description(tmp_path, monkeypatch):
+    target = e2e.Target(tmp_path, tmp_path / 'runtime')
+    monkeypatch.setattr(e2e.Target, 'local', classmethod(lambda cls: target))
+    ctx = multiprocessing.get_context('fork')
+    driver, worker = ctx.Pipe()
+    with e2e._locked(target) as fd:
+        child = ctx.Process(target=check_lease, args=(target, fd, worker))
+        child.start()
+        try:
+            e2e._write_dirty(target, e2e.RunGroup.current(child.pid))
+            driver.send('recorded')
+            child.join(8)
+            assert child.exitcode == 0
+        finally:
+            if child.is_alive():
+                child.kill()
+                child.join(8)
+
+
 @pytest.mark.parametrize('storage_failure', [False, True])
 def test_suite_exec_is_gated_on_persisting_its_process_group(tmp_path, monkeypatch, storage_failure):
     target = e2e.Target(tmp_path, tmp_path / 'runtime')
