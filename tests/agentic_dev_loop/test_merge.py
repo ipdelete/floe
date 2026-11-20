@@ -19,7 +19,7 @@ REPO = "ipdelete/floe"
 ADR = ".agents/engineering/29-agentic-dev-loop/design.md"
 LOG = ".agents/engineering/29-agentic-dev-loop/decisions.md"
 LEGACY_DESIGN = IssueRef(REPO, 30)
-POLICY = DesignProtection(ADR, LOG, frozenset({LEGACY_DESIGN}))
+POLICY = DesignProtection(ADR, frozenset({LEGACY_DESIGN}))
 PR = IssueRef(REPO, 999)
 STORY = Candidate(PR, "Add fixture behavior", "ipdelete", "master", "a" * 40, "b" * 40)
 FILE = ChangedPath("tools/floe_example.py")
@@ -103,16 +103,14 @@ def test_design_closing_link_on_last_page_blocks_an_ordinary_title(link):
     assert transport.squashes == []
 
 
-@pytest.mark.parametrize("path", [ADR, LOG])
-@pytest.mark.parametrize("kind", ["modify", "delete", "rename-from", "rename-to"])
-def test_protected_path_on_last_page_blocks_an_ordinary_title_and_story_link(path, kind):
-    changes = {
-        "modify": ChangedPath(path),
-        "delete": ChangedPath(path, ChangeKind.DELETE),
-        "rename-from": ChangedPath("archive.md", ChangeKind.RENAME, path),
-        "rename-to": ChangedPath(path, ChangeKind.RENAME, "archive.md"),
-    }
-    transport = Transport(snapshot(path=changes[kind]))
+@pytest.mark.parametrize("change", [
+    ChangedPath(ADR),
+    ChangedPath(ADR, ChangeKind.DELETE),
+    ChangedPath("archive.md", ChangeKind.RENAME, ADR),
+    ChangedPath(ADR, ChangeKind.RENAME, "archive.md"),
+], ids=["modify", "delete", "rename-from", "rename-to"])
+def test_adr_change_on_last_page_blocks_an_ordinary_title_and_story_link(change):
+    transport = Transport(snapshot(path=change))
 
     assert transport.attempt() is MergeOutcome.DESIGN_PR
     assert ("paths", "later") in transport.events
@@ -162,7 +160,7 @@ def test_missing_fields_do_not_prove_a_non_design_change(table, item):
 
 @pytest.mark.parametrize("fresh", [
     snapshot(candidate=replace(STORY, title="Design: Retitled with unchanged head")),
-    snapshot(path=ChangedPath(LOG, ChangeKind.DELETE)),
+    snapshot(path=ChangedPath(ADR, ChangeKind.DELETE)),
     snapshot(link=DESIGN),
 ])
 def test_design_signal_appearing_only_after_passing_story_gates_blocks(fresh):
@@ -202,6 +200,14 @@ def test_classified_story_reaches_fake_squash_once_with_stubbed_passing_story_ga
     assert transport.squashes == [STORY]
     read = ["candidate", ("paths", None), ("paths", "later"), ("links", None)]
     assert transport.events == [*read, "gates", *read, "squash"]
+
+
+def test_story_updating_decision_log_reaches_fake_squash():
+    story = snapshot(path=ChangedPath(LOG))
+    transport = Transport(story, story)
+
+    assert transport.attempt() is MergeOutcome.SQUASH_REQUESTED
+    assert transport.squashes == [STORY]
 
 
 def test_non_design_classification_does_not_replace_the_story_gates():

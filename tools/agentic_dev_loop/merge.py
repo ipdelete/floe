@@ -41,7 +41,6 @@ class ClosingIssue:
 @dataclass(frozen=True)
 class DesignProtection:
     adr_path: str
-    decision_log_path: str
     design_issues: frozenset[IssueRef]  # known identities regardless of current title
 
 
@@ -182,8 +181,7 @@ def _classify(
             return MergeOutcome.UNKNOWN_EVIDENCE
 
         paths = _read_pages(candidate, transport.changed_paths, _path_keys)
-        protected = {policy.adr_path, policy.decision_log_path}
-        if any(path.path in protected or path.previous_path in protected for path in paths):
+        if any(policy.adr_path in (path.path, path.previous_path) for path in paths):
             return MergeOutcome.DESIGN_PR
 
         links = _read_pages(candidate, transport.closing_issues, _link_keys)
@@ -209,10 +207,9 @@ def attempt_story_squash(
     if not valid_issue_ref(pr):
         raise ValueError("a repository-qualified PR number is required")
     if (not isinstance(policy, DesignProtection) or not _repo_path(policy.adr_path)
-            or not _repo_path(policy.decision_log_path) or policy.adr_path == policy.decision_log_path
             or not isinstance(policy.design_issues, frozenset)
             or not all(valid_issue_ref(issue) for issue in policy.design_issues)):
-        raise ValueError("canonical protection paths and known design identities are required")
+        raise ValueError("the canonical ADR path and known design identities are required")
 
     first = _classify(pr, policy, transport)
     if isinstance(first, MergeOutcome):

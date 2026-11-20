@@ -42,11 +42,12 @@ uv run pytest -q tests/agentic_dev_loop/test_merge.py
 ```
 
 `attempt_story_squash()` is the fixture's trusted merge entry point, separate
-from the tick. Supply the canonical ADR and decision log paths and any known
-design issue identities (including legacy #30 for feature #29) from trusted
-configuration, not from the PR. A `Design:` title, an actual closing link to a
-design issue, or a change to either canonical path blocks squash. This includes
-deletions and both sides of renames. Paths are exact, case-sensitive repository
+from the tick. Supply the canonical ADR path and any known design issue
+identities (including legacy #30 for feature #29) from trusted configuration,
+not from the PR. A `Design:` title, an actual closing link to a design issue,
+or a change to the canonical ADR blocks squash. This includes deletions and
+both sides of renames. The decision log is an ordinary file (D-23); updating it
+does not make a story PR a design PR. Paths are exact, case-sensitive repository
 paths in the Git diff, not filenames resolved in a checkout. `Design:` is the
 same literal title prefix used for feature discovery. Neither the author's
 identity nor a request for an exception changes this policy.
