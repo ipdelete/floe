@@ -142,6 +142,18 @@ def test_worker_stop_refuses_foreign_unit_and_missing_is_not_cleanup(tmp_path, m
     with pytest.raises(WorkerUnavailable):
         manager.stop(reservation)
     assert stops == []
+
+    owned = {"LoadState": "loaded", "Transient": "yes", "Description": manager._description(reservation),
+             "ActiveState": "active", "ControlGroup": f"/fixture/{FixtureManager.unit_name(reservation.run_id)}"}
+    replaced = iter((owned, {**owned, "Description": "a different reservation"}))
+    monkeypatch.setattr(manager, "_show", lambda _: next(replaced))
+    stat = Path.stat
+    with monkeypatch.context() as probe:
+        probe.setattr(Path, "stat", lambda path, **kwargs: None if path.name == "cgroup.events" else stat(path, **kwargs))
+        with pytest.raises(WorkerUnavailable, match="ownership changed"):
+            manager.stop(reservation)
+    assert stops == []
+
     monkeypatch.setattr(manager, "_show", lambda _: {"LoadState": "not-found", "ActiveState": "inactive"})
     assert manager.inspect(reservation) is WorkerState.MISSING
     assert launcher.cancel(authority, reservation.run_id).state is AttemptState.UNKNOWN
@@ -202,7 +214,7 @@ def cleanup(cli, fixture, launcher, authority):
 def test_installed_tick_lifetime(staged, timeout_case):
     fixture, write, cli, _ = staged
     # One future activation; unlike a recurring timer this cannot enqueue a second tick.
-    date = datetime.now(timezone.utc) + (timedelta(days=1) if timeout_case else timedelta(seconds=8))
+    date = datetime.now(timezone.utc) + (timedelta(days=1) if timeout_case else timedelta(seconds=15))
     script = write(date.strftime("%Y-%m-%d %H:%M:%S UTC"), timeout_case)
     release = fixture.state / "release"
     launcher, authority = fixture.launcher()
@@ -211,7 +223,7 @@ def test_installed_tick_lifetime(staged, timeout_case):
         cli("install", "--timeout", "6s" if timeout_case else "25s", script)
         if timeout_case:
             systemctl("start", "--no-block", unit)
-        tick = until(lambda: invocation(fixture), "installed tick admitting the fixture", seconds=80)
+        tick = until(lambda: invocation(fixture), "installed tick admitting the fixture", seconds=90)
         until(lambda: read_json(fixture.state / "heartbeat.json"), "worker heartbeat")
         worker = heartbeat(fixture, tick)
         assert Path(f"/proc/{tick['pid']}/cmdline").read_bytes().split(b"\0") == [

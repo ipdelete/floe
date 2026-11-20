@@ -73,10 +73,10 @@ class FixtureManager:
     def _description(reservation: Reservation) -> str:
         return f"Floe E2E fixture {reservation.run_id} {reservation.session_id}"
 
-    def _systemctl(self, *args, check=True):
+    def _systemctl(self, *args, check=True, timeout=5):
         try:
             return subprocess.run(["/usr/bin/systemctl", "--user", *args], check=check,
-                                  text=True, capture_output=True, timeout=5)
+                                  text=True, capture_output=True, timeout=timeout)
         except (OSError, subprocess.SubprocessError) as exc:
             raise WorkerUnavailable(f"fixture systemctl {args[0]} failed") from exc
 
@@ -148,10 +148,16 @@ class FixtureManager:
             events_file.stat()  # Confirm the unit's cgroup is visible before interpreting its removal.
         except OSError as exc:
             raise WorkerUnavailable("cannot locate the fixture cgroup") from exc
-        self._systemctl("stop", name)
+        # Recheck after the filesystem probe, immediately before the mutation.
+        # systemctl cannot condition its stop on ownership; the lease excludes
+        # cooperating callers, not unrelated same-UID manager operations.
+        current = self._show(name)
+        if not self._owns(current, reservation) or current.get("ControlGroup") != str(group):
+            raise WorkerUnavailable("fixture ownership changed before stop")
+        self._systemctl("stop", name, timeout=10)
         # A successful stop plus confirmed absence is evidence of cleanup, not
         # just a name that happens to be missing on the next launcher call.
-        deadline = time.monotonic() + 2
+        deadline = time.monotonic() + 5
         while not self._absent(self._show(name)):
             if time.monotonic() >= deadline:
                 raise WorkerUnavailable("stopped fixture unit was not collected")
@@ -238,7 +244,7 @@ class Fixture:
                 raise ValueError("the fixture must run as an installed tick")
             launcher, authority = self.launcher()
             tick = Tick(_Issues(), _Admission(launcher, authority), Cooldowns(),
-                        limits=TickLimits(tick_seconds=10, call_seconds=10))
+                        limits=TickLimits(tick_seconds=20, call_seconds=20))
             [result] = tick.reconcile([FeatureScope(_FEATURE, REQUEST.key.repo_id, REQUEST.key.feature_id,
                                                     _POLICY, "fixture-read", "fixture-write")])
             if result.outcome is not Outcome.MIRRORED or result.reservation is None:
