@@ -56,14 +56,13 @@ jobs:
       - name: Verify artifacts and refuse an existing release
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ github.ref_name }}
         run: |
           (cd dist && sha256sum --check --strict SHA256SUMS)
           actual=$(gh api --method GET "repos/$GITHUB_REPOSITORY/commits" \
-            -f "sha=refs/tags/$RELEASE_TAG" -f per_page=1 --jq '.[0].sha')
+            -f "sha=$GITHUB_REF" -f per_page=1 --jq '.[0].sha')
           test "$actual" = "$GITHUB_SHA"
           count=$(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" --paginate --slurp | \
-            jq --arg tag "$RELEASE_TAG" '[.[][] | select(.tag_name == $tag)] | length')
+            jq --arg tag "$GITHUB_REF_NAME" '[.[][] | select(.tag_name == $tag)] | length')
           test "$count" = 0 || { echo '::error::A release or draft already exists. Follow docs/releases.md recovery steps; do not overwrite it.'; exit 1; }
       - name: Create draft and upload assets
         id: release
@@ -83,10 +82,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_ID: ${{ steps.release.outputs.id }}
-          RELEASE_TAG: ${{ github.ref_name }}
         run: |
           actual=$(gh api --method GET "repos/$GITHUB_REPOSITORY/commits" \
-            -f "sha=refs/tags/$RELEASE_TAG" -f per_page=1 --jq '.[0].sha')
+            -f "sha=$GITHUB_REF" -f per_page=1 --jq '.[0].sha')
           test "$actual" = "$GITHUB_SHA"
           gh api --method PATCH "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" \
             -F draft=false -f make_latest=legacy --jq .html_url
