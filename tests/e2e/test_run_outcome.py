@@ -18,6 +18,29 @@ def floe(*args, check=True):
     return subprocess.run([FLOE, *args], check=check, capture_output=True, text=True, timeout=120)
 
 
+def test_successful_run_is_reported_as_succeeded(tmp_path):
+    # A unique name per run, so leftover journal history can't satisfy the assert.
+    name = f"floe-e2e-{uuid.uuid4().hex[:12]}"
+    workflow = tmp_path / "workflow.py"
+    workflow.write_text(
+        f"WORKFLOW = {name!r}\n"
+        'SCHEDULE = ["2099-01-01"]\n'
+        "def succeed():\n"
+        "    return 42\n"
+        'tasks = {"succeed": succeed}\n'
+        'dag = {"succeed": set()}\n'
+    )
+
+    try:
+        floe("install", str(workflow))  # inside the try: a partial install is still removed
+        floe("start", str(workflow))
+        runs = json.loads(floe("runs", str(workflow), "--json", "-n", "1").stdout)
+    finally:
+        floe("uninstall", str(workflow), check=False)
+
+    assert runs[0]["status"] == "succeeded"
+
+
 def test_failed_run_is_reported_as_failed(tmp_path):
     # A unique name per run, so leftover journal history can't satisfy the assert.
     name = f"floe-e2e-{uuid.uuid4().hex[:12]}"

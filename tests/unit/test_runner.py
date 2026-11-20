@@ -51,6 +51,22 @@ def test_failed_run_returns_false():
     assert floe.run(workflow, lambda event: None) is False
 
 
+def test_events_report_each_step_of_a_successful_run():
+    workflow, _ = chain("fetch", "publish")
+    events = []
+
+    floe.run(workflow, events.append)
+
+    assert [(e.event, e.task, e.status) for e in events] == [
+        ("run_started", None, None),
+        ("task_started", "fetch", None),
+        ("task_completed", "fetch", "succeeded"),
+        ("task_started", "publish", None),
+        ("task_completed", "publish", "succeeded"),
+        ("run_completed", None, "succeeded"),
+    ]
+
+
 def test_events_report_each_step_of_a_failed_run():
     workflow, _ = chain("fetch", "transform", "publish", fail="transform")
     events = []
