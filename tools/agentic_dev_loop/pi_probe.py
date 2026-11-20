@@ -33,7 +33,8 @@ class Blocked(Exception):
 def check_layout(role):
     if (dict(os.environ) != {**ENV, "PWD": "/work"} or any(os.isatty(fd) for fd in (0, 1, 2))
             or any(Path(path).exists() for path in ("/home", "/root", "/run", "/mnt"))
-            or (role == "tick" and any(path.exists() for path in (COPILOT, MODELS, Path("/pi"), Path("/node"))))):
+            or (role == "tick" and any(path.exists() for path in (COPILOT, MODELS, Path("/pi"), Path("/node"))))
+            or (role == "worker" and not Path("/work/.git").is_dir())):
         raise Blocked("required isolation unavailable")
 
 
@@ -164,7 +165,13 @@ FAILURES = frozenset({
 })
 
 
-def main(role, identity, session_id):
+def write_outcome(output, run_id, session_id, outcome):
+    temporary = output / "outcome.tmp"
+    temporary.write_text(json.dumps({"run_id": run_id, "session_id": session_id, "outcome": outcome}))
+    temporary.replace(output / "outcome.json")
+
+
+def main(role, identity, run_id, session_id):
     os.umask(0o077)
     try:
         execute(role, identity, session_id)
@@ -174,9 +181,7 @@ def main(role, identity, session_id):
         outcome = "smoke service operation failed"
     else:
         outcome = "ok"
-    temporary = OUTPUT / "outcome.tmp"
-    temporary.write_text(outcome + "\n")
-    temporary.replace(OUTPUT / "outcome")
+    write_outcome(OUTPUT, run_id, session_id, outcome)
     return 0 if outcome == "ok" else 1
 
 

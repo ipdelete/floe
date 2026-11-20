@@ -28,6 +28,12 @@ def test_gh_receives_token_only_in_child_environment(monkeypatch):
     assert probe.github("user", "synthetic-token") == (200, "reader")
 
 
+def test_gh_failure_keeps_http_status_but_not_error_body(monkeypatch):
+    monkeypatch.setattr(probe.subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(
+        a, 1, stdout=b"HTTP/2.0 401 Unauthorized\r\n\r\nuntrusted diagnostic"))
+    assert probe.github("user", "synthetic-token") == (401, "")
+
+
 def test_read_probe_only_performs_fixed_gets(monkeypatch):
     seen = []
 
@@ -123,7 +129,9 @@ def test_isolation_rejects_working_unix_sockets(monkeypatch):
 def test_role_mounts_do_not_share_credentials(tmp_path):
     inputs = SmokeInputs(tmp_path, "reader", "maintainer", tmp_path / "node", tmp_path / "release")
     tick = inputs.sandbox("tick", tmp_path / "tick-io")
-    worker = inputs.sandbox("worker", tmp_path / "worker-io")
+    with pytest.raises(ValueError, match="requires an isolated worktree"):
+        inputs.sandbox("worker", tmp_path / "worker-io")
+    worker = inputs.sandbox("worker", tmp_path / "worker-io", worktree=tmp_path / "worktree")
     assert "--clearenv" in tick and "--clearenv" in worker
     assert str(tmp_path / "tick-token") in tick and str(tmp_path / "tick-token") not in worker
     for name in ("worker-token", "copilot.json", "release", "node"):
@@ -142,7 +150,11 @@ def test_completion_is_reconciled_only_after_collection_and_survives_reopen(tmp_
     assert launcher.status(authority, REQUEST.key).state is AttemptState.UNKNOWN
     io = manager.io(reservation)
     io.mkdir(mode=0o700)
-    (io / "outcome").write_text("ok\n")
+    other = Reservation(reservation.key, reservation.run_id, reservation.unit_id, str(uuid4()))
+    probe.write_outcome(io, other.run_id, other.session_id, "ok")
+    with pytest.raises(WorkerUnavailable, match="smoke outcome does not match the reservation"):
+        manager.inspect(reservation)
+    probe.write_outcome(io, reservation.run_id, reservation.session_id, "ok")
     sessions = io / "sessions"
     sessions.mkdir(mode=0o700)
     with pytest.raises(WorkerUnavailable, match="native session not verified"):
@@ -156,7 +168,7 @@ def test_completion_is_reconciled_only_after_collection_and_survives_reopen(tmp_
         assert launcher.status(authority, REQUEST.key).state is AttemptState.RUNNING
     collected = launcher.status(authority, REQUEST.key)
     assert collected.state is AttemptState.SUCCEEDED and not collected.slot_reserved
-    (io / "outcome").unlink()
+    (io / "outcome.json").unlink()
     launcher, authority = fixture.launcher(manager)
     assert launcher.status(authority, reservation.run_id) == collected
 
@@ -188,12 +200,12 @@ def test_installed_pi_smoke_boundary(tmp_path, role):
     output = tmp_path / "output"
     output.mkdir(mode=0o700)
     manager = SmokeManager(tmp_path, inputs, tmp_path)
-    manager.worktree.mkdir(mode=0o700)
+    (manager.worktree / ".git").mkdir(mode=0o700, parents=True)
     reservation = Reservation(REQUEST.key, str(uuid4()), "", str(uuid4()))
     try:
         manager.dispatch(role, reservation, output)
         wait_for_collection(manager, reservation)
-        outcome = read_outcome(output)
+        outcome = read_outcome(output, reservation)
         if outcome != "required GitHub credential unavailable":
             pytest.fail(outcome or "smoke service has no verified outcome", pytrace=False)
     finally:
@@ -224,12 +236,13 @@ def test_installed_pi_smoke(request):
         )
         if initialized.returncode:
             pytest.fail("smoke Git worktree could not be initialized", pytrace=False)
+        (manager.worktree / "README.md").write_text("Supervised Floe smoke fixture.\n")
         manager.tick()
         reservation = fixture.admit(launcher, authority)
         wait_for_collection(manager, reservation)
         finished = launcher.status(authority, reservation.run_id)
         if finished.state is not AttemptState.SUCCEEDED or finished.slot_reserved:
-            outcome = read_outcome(manager.io(reservation))
+            outcome = read_outcome(manager.io(reservation), reservation)
             pytest.fail(outcome if outcome and outcome != "ok" else "smoke completion not verified", pytrace=False)
         reopened, caller = fixture.launcher(manager)
         if reopened.status(caller, REQUEST.key) != finished:
@@ -248,6 +261,7 @@ def test_installed_pi_smoke(request):
                     if cancelled.slot_reserved:
                         pytest.fail("smoke cleanup or completion remains unconfirmed", pytrace=False)
         finally:
-            shutil.rmtree(manager.worktree)
+            if manager.worktree.exists():
+                shutil.rmtree(manager.worktree)
             if manager.worktree.exists():
                 pytest.fail("smoke worktree cleanup not confirmed", pytrace=False)

@@ -51,9 +51,11 @@ class SmokeInputs:
             raise WorkerUnavailable("required private smoke provisioning unavailable") from None
         return cls(directory, config["tick_login"], config["worker_login"], node, release)
 
-    def sandbox(self, role, output, *, worktree=None, session_id=""):
+    def sandbox(self, role, output, *, worktree=None, run_id="", session_id=""):
         if role not in ("tick", "worker"):
             raise ValueError("unknown smoke role")
+        if role == "worker" and worktree is None:
+            raise ValueError("worker requires an isolated worktree")
         args = ["/usr/bin/bwrap", "--clearenv", "--unshare-user", "--disable-userns", "--unshare-pid",
                 "--unshare-ipc", "--die-with-parent", "--new-session", "--ro-bind", "/usr", "/usr",
                 "--symlink", "usr/lib", "/lib", "--symlink", "usr/bin", "/bin", "--proc", "/proc",
@@ -71,11 +73,10 @@ class SmokeInputs:
             args += ["--ro-bind", str(self.node), "/node", "--ro-bind", str(self.release), "/pi",
                      "--ro-bind", str(self.directory / "copilot.json"), "/input/copilot.json",
                      "--ro-bind", str(self.directory / "models-store.json"), "/input/models-store.json"]
-            if worktree is not None:
-                args += ["--ro-bind", str(worktree), "/work"]
+            args += ["--ro-bind", str(worktree), "/work"]
         identity = self.worker_login if role == "worker" else self.tick_login
-        return args + ["--remount-ro", "/", "--chdir", "/work", "--", "/usr/bin/python3.14", "-I",
-                       "/probe.py", role, identity, session_id]
+        return args + ["--remount-ro", "/", "--setenv", "PWD", "/work", "--chdir", "/work", "--",
+                       "/usr/bin/python3.14", "-I", "/probe.py", role, identity, run_id, session_id]
 
 
 class SmokeManager(FixtureManager):
@@ -107,7 +108,7 @@ class SmokeManager(FixtureManager):
             "-p", "SystemCallFilter=~@keyring io_uring_setup", "-p", "SystemCallErrorNumber=EPERM",
             "-p", "SystemCallArchitectures=native",
             "/usr/bin/env", "-i", *self.inputs.sandbox(role, output, worktree=self.worktree,
-                                                        session_id=reservation.session_id),
+                                                        run_id=reservation.run_id, session_id=reservation.session_id),
         ]
         try:
             subprocess.run(argv, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5)
@@ -127,7 +128,7 @@ class SmokeManager(FixtureManager):
                 if time.monotonic() >= deadline:
                     raise WorkerUnavailable("tick smoke did not collect")
                 time.sleep(0.05)
-            if (outcome := read_outcome(output)) != "ok":
+            if (outcome := read_outcome(output, reservation)) != "ok":
                 raise WorkerUnavailable(outcome or "tick smoke has no verified outcome")
         finally:
             if self._owns(self._show(self.unit_name(reservation.run_id)), reservation):
@@ -149,7 +150,7 @@ class SmokeManager(FixtureManager):
             # Wait through the inactive/failed transition until systemd has
             # actually collected the transient service.
             return WorkerState.RUNNING
-        outcome = read_outcome(self.io(reservation))
+        outcome = read_outcome(self.io(reservation), reservation)
         if outcome == "ok":
             if not pi_probe.verify_session(self.io(reservation) / "sessions", reservation.session_id):
                 raise WorkerUnavailable("native session not verified")
@@ -159,15 +160,19 @@ class SmokeManager(FixtureManager):
         return super().inspect(reservation)
 
 
-def read_outcome(output):
+def read_outcome(output, reservation):
     try:
-        outcome = (output / "outcome").read_text().strip()
+        receipt = json.loads((output / "outcome.json").read_text())
     except FileNotFoundError:
         return None
     except (OSError, ValueError):
         raise WorkerUnavailable("smoke outcome unreadable") from None
-    if outcome != "ok" and outcome not in pi_probe.FAILURES:
+    if (not isinstance(receipt, dict) or set(receipt) != {"run_id", "session_id", "outcome"}
+            or not isinstance(outcome := receipt["outcome"], str)
+            or (outcome != "ok" and outcome not in pi_probe.FAILURES)):
         raise WorkerUnavailable("smoke outcome invalid")
+    if (receipt["run_id"], receipt["session_id"]) != (reservation.run_id, reservation.session_id):
+        raise WorkerUnavailable("smoke outcome does not match the reservation")
     return outcome
 
 
