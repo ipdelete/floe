@@ -32,9 +32,11 @@ feature.
   if one is, wait. The agentic loop may install and validate its own units there.
   Anything else that changes the user's systemd session still needs approval.
 - Agents use the maintainer's `gh` login (#29, D-11). Never merge a design PR
-  (one that changes an effort's `design.md` or `decisions.md`, closes a design
-  issue, or is titled `Design:`) unless the maintainer explicitly tells you to
-  merge that exact PR; the maintainer's merge is the design approval. Do not
+  (one that changes an effort's `design.md`, changes or removes existing
+  `decisions.md` content, closes a design issue, or is titled `Design:`) unless
+  the maintainer explicitly tells you to merge that exact PR; the maintainer's
+  merge is the design approval. A story PR may append new `I-` rows to
+  `decisions.md`'s implementation table and change nothing else there. Do not
   change repository settings.
 - Workflow Python is trusted executable code, not sandboxed data. Execute it
   only where documented; metadata-only inspection must not load definitions.
