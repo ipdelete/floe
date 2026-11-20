@@ -75,7 +75,8 @@ def test_worker_runs_fixed_persistent_command_once(monkeypatch, tmp_path):
         assert kwargs["stderr"] == subprocess.DEVNULL
         assert not {"GH_TOKEN", "SSH_AUTH_SOCK"} & kwargs["env"].keys()
         native(sessions, session_id)
-        return subprocess.CompletedProcess(argv, 0, stdout=probe.REPLY.encode())
+        kwargs["stdout"].write(probe.REPLY.encode())
+        return subprocess.CompletedProcess(argv, 0)
 
     monkeypatch.setattr(probe.subprocess, "run", fake_run)
     probe.run_pi(session_id)
@@ -185,6 +186,16 @@ def test_outcome_temporary_file_is_not_followed(tmp_path):
     with pytest.raises(FileExistsError):
         probe.write_outcome(tmp_path, str(uuid4()), str(uuid4()), "ok")
     assert unrelated.read_text() == "unchanged"
+
+
+def test_supervisor_does_not_follow_outcome_link(tmp_path):
+    reservation = Reservation(REQUEST.key, str(uuid4()), "", str(uuid4()))
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    probe.write_outcome(elsewhere, reservation.run_id, reservation.session_id, "ok")
+    (tmp_path / "outcome.json").symlink_to(elsewhere / "outcome.json")
+    with pytest.raises(WorkerUnavailable, match="smoke outcome unreadable"):
+        read_outcome(tmp_path, reservation)
 
 
 def wait_for_collection(manager, reservation, seconds=85):

@@ -9,6 +9,7 @@ import socket
 import stat
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from uuid import UUID
 
@@ -131,15 +132,20 @@ def run_pi(session_id):
     }))
     if MODELS.exists():
         (AGENT / "models-store.json").write_bytes(MODELS.read_bytes())
-    result = subprocess.run(
-        ["/node", "/pi/node_modules/.bin/pi", "--print", "--model", MODEL, "--thinking", "off",
-         "--session-id", session_id, "--name", SESSION_NAME, "--session-dir", str(SESSIONS),
-         "--no-tools", "--no-extensions", "--no-skills", "--no-prompt-templates", "--no-themes",
-         "--no-context-files", PROMPT],
-        env={**ENV, "PI_CODING_AGENT_DIR": str(AGENT), "PI_OFFLINE": "1"}, stdin=subprocess.DEVNULL,
-        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=45,
-    )
-    if result.returncode != 0 or result.stdout.strip() != REPLY.encode():
+    # The service limits file size; capture in private tmpfs rather than
+    # buffering arbitrarily large output in memory or sending it to journald.
+    with tempfile.TemporaryFile(dir=AGENT) as response:
+        result = subprocess.run(
+            ["/node", "/pi/node_modules/.bin/pi", "--print", "--model", MODEL, "--thinking", "off",
+             "--session-id", session_id, "--name", SESSION_NAME, "--session-dir", str(SESSIONS),
+             "--no-tools", "--no-extensions", "--no-skills", "--no-prompt-templates", "--no-themes",
+             "--no-context-files", PROMPT],
+            env={**ENV, "PI_CODING_AGENT_DIR": str(AGENT), "PI_OFFLINE": "1"}, stdin=subprocess.DEVNULL,
+            stdout=response, stderr=subprocess.DEVNULL, timeout=45,
+        )
+        response.seek(0)
+        reply = response.read(129)
+    if result.returncode != 0 or len(reply) > 128 or reply.strip() != REPLY.encode():
         raise Blocked("Pi smoke response not verified")
     if not verify_session(SESSIONS, session_id):
         raise Blocked("native session not verified")
@@ -167,7 +173,8 @@ FAILURES = frozenset({
 
 def write_outcome(output, run_id, session_id, outcome):
     temporary = output / "outcome.tmp"
-    with temporary.open("x") as stream:
+    fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "w") as stream:
         json.dump({"run_id": run_id, "session_id": session_id, "outcome": outcome}, stream)
     temporary.replace(output / "outcome.json")
 

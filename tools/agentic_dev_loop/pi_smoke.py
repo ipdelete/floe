@@ -107,7 +107,7 @@ class SmokeManager(FixtureManager):
             "-p", "RuntimeMaxSec=80s", "-p", "TimeoutStopSec=3s", "-p", "KillMode=control-group",
             "-p", "ExitType=cgroup",
             "-p", "StandardInput=null", "-p", "StandardOutput=null", "-p", "StandardError=null",
-            "-p", "UMask=0077", "-p", "LimitCORE=0", "-p", "NoNewPrivileges=yes",
+            "-p", "UMask=0077", "-p", "LimitCORE=0", "-p", "LimitFSIZE=1M", "-p", "NoNewPrivileges=yes",
             "-p", "RestrictAddressFamilies=AF_INET AF_INET6 AF_NETLINK",
             "-p", "SystemCallFilter=~@keyring io_uring_setup", "-p", "SystemCallErrorNumber=EPERM",
             "-p", "SystemCallArchitectures=native",
@@ -166,7 +166,16 @@ class SmokeManager(FixtureManager):
 
 def read_outcome(output, reservation):
     try:
-        receipt = json.loads((output / "outcome.json").read_text())
+        fd = os.open(output / "outcome.json", os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        with os.fdopen(fd, "rb") as stream:
+            info = os.fstat(stream.fileno())
+            if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid()
+                    or stat.S_IMODE(info.st_mode) != 0o600 or info.st_nlink != 1):
+                raise ValueError
+            data = stream.read(1025)
+            if len(data) > 1024:
+                raise ValueError
+            receipt = json.loads(data)
     except FileNotFoundError:
         return None
     except (OSError, ValueError):
