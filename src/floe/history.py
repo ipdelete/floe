@@ -251,6 +251,8 @@ def _build_run(workflow: str, invocation: str, records: list[dict], running: boo
         when = _event_time(event)
         if event.event == "run_started":
             evidence.started = when
+        elif event.event == "run_completed":
+            evidence.completed = (event, when)
         elif event.event == "task_started" and event.task:
             tasks[event.task] = TaskRun(event.task, "running", started=when)
         elif event.event == "task_completed" and event.task:
@@ -259,22 +261,7 @@ def _build_run(workflow: str, invocation: str, records: list[dict], running: boo
                                         error=event.error, retry_at=None, failure_reason=event.failure_reason)
         elif event.event in ("attempt_started", "attempt_completed", "retry_scheduled") and event.task:
             task = tasks.get(event.task) or TaskRun(event.task, "running")
-            attempts = {attempt.number: attempt for attempt in task.attempts}
-            retry_at = None
-            if event.event == "retry_scheduled":
-                try:
-                    retry_at = when + timedelta(seconds=event.delay_seconds)
-                except OverflowError:
-                    retry_at = None
-            elif event.event == "attempt_started":
-                attempts[event.attempt] = AttemptRun(event.attempt, "running", started=when)
-            else:
-                attempt = attempts.get(event.attempt) or AttemptRun(event.attempt, "incomplete")
-                attempts[event.attempt] = replace(attempt, status=event.status, finished=when, error=event.error)
-            tasks[event.task] = replace(task, attempts=tuple(attempts[n] for n in sorted(attempts)),
-                                        max_attempts=event.max_attempts, retry_at=retry_at)
-        elif event.event == "run_completed":
-            evidence.completed = (event, when)
+            tasks[event.task] = _apply_retry_event(task, event, when)
 
     first = _time(records[0]) if records else None
     status, finished, error = _resolve_run_status(evidence, running=running, has_tasks=bool(tasks))
@@ -287,6 +274,23 @@ def _build_run(workflow: str, invocation: str, records: list[dict], running: boo
     return Run(workflow=workflow, run_id=invocation, status=status,
                started=evidence.started or (None if truncated else first), finished=finished,
                error=error, tasks=tuple(tasks.values()), result=evidence.systemd_result, truncated=truncated)
+
+
+def _apply_retry_event(task: TaskRun, event: Event, when: datetime) -> TaskRun:
+    attempts = {attempt.number: attempt for attempt in task.attempts}
+    retry_at = None
+    if event.event == "retry_scheduled":
+        try:
+            retry_at = when + timedelta(seconds=event.delay_seconds)
+        except OverflowError:
+            pass  # The wait is recorded, but its end is outside datetime's range.
+    elif event.event == "attempt_started":
+        attempts[event.attempt] = AttemptRun(event.attempt, "running", started=when)
+    else:
+        attempt = attempts.get(event.attempt) or AttemptRun(event.attempt, "incomplete")
+        attempts[event.attempt] = replace(attempt, status=event.status, finished=when, error=event.error)
+    return replace(task, attempts=tuple(attempts[n] for n in sorted(attempts)),
+                   max_attempts=event.max_attempts, retry_at=retry_at)
 
 
 def _error_output(output: list[str], result: str | None) -> str | None:
