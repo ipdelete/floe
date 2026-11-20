@@ -248,6 +248,9 @@ def _scanner_bytes(binary: Path) -> bytes | None:
 
 def _scan(command: list[str], work: Path, data: bytes) -> list[str]:
     result = subprocess.run(command, input=data, capture_output=True, timeout=_SCAN_TIMEOUT, cwd=work, env={})
+    if result.returncode not in (0, _FINDINGS_EXIT):
+        raise ValueError
+    # A findings exit without a valid v8.30.0 --redact=100 report is a scanner error.
     report = json.loads(result.stdout, object_pairs_hook=_unique_object)
     if result.returncode == 0 and report == [] and not result.stderr.strip():
         return []
@@ -295,7 +298,9 @@ def release_closeout(candidate: FrozenCloseout, staging_root: Path, feature: Iss
     The operator supplies protected policy, root (including its parents),
     scanner and writer. The writer must use only the immutable delta, never
     reread a staging tree, and handle its own authorization and write recovery.
-    No result from this function is evidence of GitHub state.
+    Writer exceptions propagate: once invoked, a writer failure is not proof
+    of a private hold or permission to retry. RELEASED means only that the
+    callback returned normally, not that a remote write was verified.
     """
     try:
         tag = _feature_tag(feature, slug)

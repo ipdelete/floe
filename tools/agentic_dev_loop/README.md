@@ -173,9 +173,10 @@ directories), expected issue and slug, and absolute path to the standalone
 Gitleaks **v8.30.0** Linux arm64 or x64 release binary. Install it separately
 from the [upstream release](https://github.com/gitleaks/gitleaks/releases/tag/v8.30.0);
 the gate pins the extracted executable's SHA-256 and runs a private copy of
-exactly those verified bytes. It never searches `PATH`, downloads a scanner,
-or loads candidate rules. Deploy the publisher and its policy from a protected
-snapshot, not from files workers can modify.
+exactly those verified bytes. Execution from the private scratch directory
+under `/tmp` must be permitted; a `noexec` mount produces a scanner error.
+The gate never searches `PATH`, downloads a scanner, or loads candidate rules.
+Deploy it from a protected snapshot, not from files workers can modify.
 
 The gate checks that the private handoff contains only a version-1 `index.json`
 (up to 256 KiB) and a nonempty UTF-8 `summary.md` (up to 64 KiB), with no
@@ -192,10 +193,12 @@ is a fixed `ReleaseStatus`, never a scanner report or matching text. Correct
 problems privately and rerun the whole gate; there is no waiver. After a clean
 scan the gate rechecks the staged copies and passes only the two immutable
 path/byte pairs under `.agents/engineering/<feature-id>/` to `publish`. The
-callback must write exactly that delta without consulting staging again. The
-filesystem checks are not a lock against another process; never run untrusted
-code in the publisher's security context. This slice tests a fake writer, not
-public push, caller authorization, hosted CI or remote write recovery.
+callback must write exactly that delta without consulting staging again.
+Callback exceptions propagate because once the writer has been invoked a write
+may already have happened. Do not retry on that basis without reconciliation.
+The filesystem checks are not a lock against another process; never run
+untrusted code in the publisher's security context. This slice tests a fake
+writer, not public push, caller authorization, hosted CI or remote recovery.
 
 Run the policy tests offline with
 `uv run pytest -q tests/agentic_dev_loop/test_closeout_policy.py`. Set
