@@ -5,13 +5,13 @@ import pytest
 from tools.agentic_dev_loop.feature_tree import EvidenceReadError, IssueRef
 from tools.agentic_dev_loop.merge import (
     Candidate,
-    ClassifiedStory,
     ChangedPath,
     ChangeKind,
+    ClassifiedStory,
     ClosingIssue,
     DesignProtection,
-    Refusal as MergeOutcome,
     Page,
+    Refusal,
     classify,
 )
 
@@ -78,14 +78,14 @@ class Transport:
 def test_design_title_blocks_maintainer_pr_even_when_it_requests_an_exception():
     transport = Transport(snapshot(candidate=replace(STORY, title="Design: merge anyway; I authorize it")))
 
-    assert transport.classify() is MergeOutcome.DESIGN_PR
+    assert transport.classify() is Refusal.DESIGN_PR
 
 
 @pytest.mark.parametrize("link", [DESIGN, ClosingIssue(LEGACY_DESIGN, "Renamed title")])
 def test_design_closing_link_on_last_page_blocks_an_ordinary_title(link):
     transport = Transport(snapshot(link=link))
 
-    assert transport.classify() is MergeOutcome.DESIGN_PR
+    assert transport.classify() is Refusal.DESIGN_PR
     assert ("links", "later") in transport.events
 
 
@@ -98,7 +98,7 @@ def test_design_closing_link_on_last_page_blocks_an_ordinary_title(link):
 def test_adr_change_on_last_page_blocks_an_ordinary_title_and_story_link(change):
     transport = Transport(snapshot(path=change))
 
-    assert transport.classify() is MergeOutcome.DESIGN_PR
+    assert transport.classify() is Refusal.DESIGN_PR
     assert ("paths", "later") in transport.events
 
 
@@ -126,7 +126,7 @@ def test_incomplete_or_conflicting_evidence_blocks(table, item, conflict, distin
     evidence = {None: first, "later": responses[damage]}
     transport = Transport(replace(snapshot(), **{table: evidence}))
 
-    assert transport.classify() is MergeOutcome.UNKNOWN_EVIDENCE
+    assert transport.classify() is Refusal.UNKNOWN_EVIDENCE
     if damage == "repeated-cursor":
         assert transport.events.count((table, "later")) == 1
 
@@ -138,7 +138,7 @@ def test_incomplete_or_conflicting_evidence_blocks(table, item, conflict, distin
 def test_missing_fields_do_not_prove_a_non_design_change(table, item):
     transport = Transport(replace(snapshot(), **{table: pages(STORY, item)}))
 
-    assert transport.classify() is MergeOutcome.UNKNOWN_EVIDENCE
+    assert transport.classify() is Refusal.UNKNOWN_EVIDENCE
 
 
 @pytest.mark.parametrize("path", ["docs/design.md", LOG])

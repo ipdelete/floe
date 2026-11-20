@@ -8,10 +8,10 @@ from typing import Protocol
 
 from .checked_e2e import Binding, Check, Evidence, check_passed, review_passed, valid_binding
 from .feature_tree import EvidenceReadError, IssueRef, valid_issue_ref
-from .github_writes import WriterBusy, _digest, _locked_writer
+from .github_writes import WriterBusy, locked_writer, request_fingerprint
 from .merge import Candidate, CandidateReader, ChangedPath, ClassifiedStory, ClosingIssue, DesignProtection, classify
 from .readiness import (
-    Blocker, FeatureEvidence, IssueState, Policy, PullRequestState, Reason, RevisionRequest, decide_feature, valid_sha,
+    FeatureEvidence, IssueState, Policy, PullRequestState, RevisionRequest, StoryMergeCandidate, decide_feature, valid_sha,
 )
 
 
@@ -134,8 +134,7 @@ def _gate_passes(request: StoryRequest, policy: MergePolicy, gates: GateEvidence
     scope = decide_feature(request.feature, policy.readiness, gates.feature_evidence)
     binding = request.binding
     if (scope.approval is None or scope.approval.sha != binding.adr_revision
-            or binding.pr.number not in scope.merge_candidates
-            or Blocker(request.story.number, Reason.EXISTING_PR, (binding.pr.number,)) not in scope.blockers):
+            or StoryMergeCandidate(request.story.number, binding.pr.number) not in scope.merge_stories):
         return False
     checks = gates.checks
     if (not isinstance(checks, Evidence) or checks.binding != binding
@@ -178,7 +177,7 @@ class MergeBroker:
                 or request.binding.pr in (request.feature, request.story)):
             raise ValueError("a feature, its story and an exact story PR binding are required")
         try:
-            with _locked_writer(self._directory) as conn:
+            with locked_writer(self._directory) as conn:
                 return self._reconcile(conn, request)
         except WriterBusy:
             return Result(Outcome.BUSY)
@@ -197,7 +196,7 @@ class MergeBroker:
             raise ValueError("a revision-bound Builder contradiction is required")
         repo = request.feature.repo.casefold()
         try:
-            with _locked_writer(self._directory) as conn:
+            with locked_writer(self._directory) as conn:
                 if _unsettled(conn, repo, request.feature.number):
                     return Outcome.IN_FLIGHT
                 conn.execute("INSERT OR IGNORE INTO redesign_holds VALUES (?, ?, ?)",
@@ -207,6 +206,16 @@ class MergeBroker:
             return Outcome.BUSY
         except (OSError, sqlite3.Error):
             return Outcome.UNKNOWN
+
+    def _open_state(self, request: StoryRequest) -> StoryState | Result:
+        pr, story = request.binding.pr, request.story
+        state = self._transport.story_state(pr, story)
+        if (not isinstance(state, StoryState) or not isinstance(state.pr_state, PullRequestState)
+                or not isinstance(state.issue_state, IssueState)):
+            return Result(Outcome.UNKNOWN)
+        if state != StoryState(pr, story, PullRequestState.OPEN, IssueState.OPEN):
+            return Result(Outcome.DISCREPANCY)
+        return state
 
     def _checked_command(self, request: StoryRequest, state: StoryState) -> SquashCommand | None:
         binding = request.binding
@@ -229,7 +238,7 @@ class MergeBroker:
         pr = request.binding.pr
         feature = request.feature.number
         key = (pr.repo.casefold(), pr.number)
-        fingerprint = _digest(asdict(request))
+        fingerprint = request_fingerprint(asdict(request))
         row = conn.execute("""SELECT fingerprint, message, observed_sha, verified FROM story_squashes
                               WHERE repo = ? AND pr = ?""", key).fetchone()
         if row is not None:
@@ -245,12 +254,9 @@ class MergeBroker:
         if conn.execute("SELECT 1 FROM redesign_holds WHERE repo = ? AND feature = ? AND revision = ?",
                         (key[0], feature, request.binding.adr_revision)).fetchone():
             return Result(Outcome.BLOCKED)
-        state = self._transport.story_state(pr, request.story)
-        if (not isinstance(state, StoryState) or not isinstance(state.pr_state, PullRequestState)
-                or not isinstance(state.issue_state, IssueState)):
-            return Result(Outcome.UNKNOWN)
-        if state != StoryState(pr, request.story, PullRequestState.OPEN, IssueState.OPEN):
-            return Result(Outcome.DISCREPANCY)
+        state = self._open_state(request)
+        if isinstance(state, Result):
+            return state
         command = self._checked_command(request, state)
         if command is None:
             return Result(Outcome.BLOCKED)
@@ -259,6 +265,9 @@ class MergeBroker:
             return Result(Outcome.NO_CONDITIONAL_TRANSPORT)
         if command != self._checked_command(request, state):
             return Result(Outcome.BLOCKED)
+        fresh_state = self._open_state(request)
+        if isinstance(fresh_state, Result):
+            return fresh_state
 
         # Claim before contacting the transport. If interrupted after this commit,
         # even unchanged external state is not proof the request cannot apply.

@@ -1,3 +1,5 @@
+import multiprocessing
+import os
 from dataclasses import replace
 
 import pytest
@@ -67,6 +69,7 @@ class HeadOnly:
         self.current = CANDIDATE
         self.paths = (ChangedPath("tools/new.py"),)
         self.links = (ClosingIssue(STORY, "Story: Fixture"),)
+        self.closing_total = None
         self.gates_now = GATES
         self.state = OPEN
         self.requests = []
@@ -83,7 +86,8 @@ class HeadOnly:
 
     def closing_issues(self, candidate, cursor):
         assert cursor is None
-        return Page(self.current, self.links, len(self.links), None)
+        total = len(self.links) if self.closing_total is None else self.closing_total
+        return Page(self.current, self.links, total, None)
 
     def gates(self, request):
         assert request == REQUEST
@@ -193,7 +197,7 @@ def test_each_gate_independently_blocks(directory, bad_gates):
     assert transport.requests == []
 
 
-@pytest.mark.parametrize('field', ['head_sha', 'base_sha', 'title', 'revision', 'path', 'closing_link'])
+@pytest.mark.parametrize('field', ['head_sha', 'base_sha', 'title', 'revision', 'path', 'closing_link', 'truncated_links'])
 def test_final_recheck_catches_change(directory, field):
     transport = Atomic()
 
@@ -204,6 +208,8 @@ def test_final_recheck_catches_change(directory, field):
             transport.paths += (ChangedPath(ADR, ChangeKind.DELETE),)
         elif field == 'closing_link':
             transport.links += (ClosingIssue(DESIGN, 'Retitled design'),)
+        elif field == 'truncated_links':
+            transport.closing_total = 2
         else:
             transport.current = replace(CANDIDATE, **{field: 'Design: Now design' if field == 'title' else OTHER})
 
@@ -252,6 +258,13 @@ def test_redesign_and_merge_share_the_writer_lock_and_redesign_leaves_a_hold(dir
     assert transport.requests == []
 
 
+def test_final_recheck_catches_premature_closure_without_sending(directory):
+    transport = Atomic()
+    transport.after_first_gates = lambda: setattr(transport, 'state', replace(OPEN, issue_state=IssueState.CLOSED))
+    assert broker(directory, transport).reconcile(REQUEST).outcome is Outcome.DISCREPANCY
+    assert transport.requests == []
+
+
 def test_premature_close_never_squashes(directory):
     transport = Atomic()
     transport.state = replace(OPEN, issue_state=IssueState.CLOSED)
@@ -290,6 +303,41 @@ def test_lost_reply_and_branch_deletion_reconcile_by_pr_after_reopen(directory):
     result = broker(directory, transport).reconcile(REQUEST)
     assert result.outcome is Outcome.VERIFIED and result.squash_sha == SQUASH
     assert len(transport.requests) == transport.writes == 1
+
+
+def test_discrepancy_keeps_claim_and_blocks_redesign_until_completion(directory):
+    transport = Atomic()
+    transport.after_write = lambda: setattr(transport, 'state', replace(DONE, issue_state=IssueState.OPEN, closed_by=None))
+    assert broker(directory, transport).reconcile(REQUEST).outcome is Outcome.DISCREPANCY
+    assert broker(directory, transport).register_redesign(REVISION_REQUEST) is Outcome.IN_FLIGHT
+    transport.state = DONE
+    assert broker(directory, transport).reconcile(REQUEST).outcome is Outcome.VERIFIED
+    assert broker(directory, transport).register_redesign(REVISION_REQUEST) is Outcome.REGISTERED
+    assert len(transport.requests) == 1
+
+
+def test_process_loss_at_send_boundary_leaves_claim_and_rejects_rebinding(directory):
+    def interrupted():
+        transport = Atomic()
+        transport.before_write = lambda: os._exit(24)
+        broker(directory, transport).reconcile(REQUEST)
+
+    worker = multiprocessing.get_context('fork').Process(target=interrupted)
+    worker.start()
+    try:
+        worker.join(timeout=5)
+        assert worker.exitcode == 24
+    finally:
+        if worker.is_alive():
+            worker.kill()
+            worker.join(timeout=5)
+        worker.close()
+
+    transport = Atomic()
+    assert broker(directory, transport).reconcile(REQUEST).outcome is Outcome.IN_FLIGHT
+    changed = replace(REQUEST, binding=replace(BINDING, head_sha=OTHER))
+    assert broker(directory, transport).reconcile(changed).outcome is Outcome.DISCREPANCY
+    assert transport.requests == []
 
 
 def test_unchanged_readback_after_lost_reply_does_not_allow_blind_retry(directory):

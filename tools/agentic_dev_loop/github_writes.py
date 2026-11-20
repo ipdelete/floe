@@ -328,11 +328,12 @@ def _compare(change: Change, snapshot: Snapshot) -> int | str | _Gate:
     return _Gate.CONFLICT
 
 
-def _digest(value: object) -> str:
+def request_fingerprint(value: object) -> str:
     return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
 
 
 def _open(directory: Path, *, mode: str) -> sqlite3.Connection:
+    # Each claim statement commits before control returns to a caller that can send.
     conn = sqlite3.connect(f"{(directory / 'writes.sqlite3').as_uri()}?mode={mode}",
                            uri=True, autocommit=True, timeout=0)
     try:
@@ -374,7 +375,7 @@ class WriterBusy(Exception):
 
 
 @contextmanager
-def _locked_writer(directory: Path):
+def locked_writer(directory: Path):
     # Keep one lock across durable commits and calls to external transports.
     with (directory / "writer.lock").open("rb") as lock:
         try:
@@ -401,9 +402,9 @@ class Writer:
         if operation.repo_id != self._repo_id:
             return Result(Outcome.CONFLICT)
         target = json.dumps((operation.repo_id, *_target(operation)))
-        fingerprint = _digest([type(operation.change).__name__, asdict(operation)])
+        fingerprint = request_fingerprint([type(operation.change).__name__, asdict(operation)])
         try:
-            with _locked_writer(self._directory) as conn:
+            with locked_writer(self._directory) as conn:
                 return self._reconcile(conn, operation, target, fingerprint, deadline)
         except WriterBusy:
             return Result(Outcome.BUSY)
@@ -434,7 +435,7 @@ class Writer:
             terminal = None
             if (evidence.snapshot.key == operation.change.reservation.key and current is not None
                     and current.status in _TERMINAL):
-                terminal = _digest(asdict(current))
+                terminal = request_fingerprint(asdict(current))
                 conn.execute("INSERT OR IGNORE INTO terminal_run VALUES (?, ?)", (target, terminal))
             prior = conn.execute("SELECT fingerprint FROM terminal_run WHERE target = ?", (target,)).fetchone()
             if prior is not None and prior[0] != terminal:

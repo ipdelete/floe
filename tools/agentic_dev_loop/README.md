@@ -168,12 +168,16 @@ The broker claims the squash before sending once with explicit `Refs:` trailers
 for the feature and story. It reconciles by stable PR and issue number, even
 if the topic branch is deleted. Completion requires an independently read
 squash SHA distinct from the tested SHA, the expected base parent and message,
-and an issue closure attributed to that PR. Premature closure, a wrong commit
-or missing auto-close is a discrepancy. An unresolved reply never authorizes
-another send, even if the PR still looks open. Only a definite rejection at
-the write boundary clears the claim for fresh validation. Keep the same request
-and journal on recovery; a verified receipt records the historical effect,
-not current issue state.
+and an issue closure attributed to that PR. The comparison allows trailing
+newlines, not a provider-added suffix. Hosted message preservation is unproven.
+Premature closure, a wrong commit or missing auto-close is a discrepancy.
+Reconcile again if evidence is delayed; a persistent discrepancy requires
+operator investigation of the PR, commit and issue timeline. It does not
+clear a squash claim or unblock redesign publication, and there is no force
+or reset path. An unresolved reply never authorizes another send, even if the
+PR still looks open. Only a definite rejection at the write boundary clears
+the claim for fresh validation. Keep the same request and journal on recovery;
+a verified receipt records the historical effect, not current issue state.
 
 ## Installed fixture lifetime gate
 
