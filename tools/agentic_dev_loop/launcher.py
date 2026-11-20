@@ -161,7 +161,12 @@ def _connect(path: Path, *, mode: str) -> sqlite3.Connection:
 
 
 def initialize_ledger(state_dir: Path) -> None:
-    """Provision a new private state directory once, never repair lost state."""
+    """Provision a fresh fixture scope, never replace an existing ledger.
+
+    Version 1 has no migration path. Keep the old ledger for evidence; do not
+    point a new ledger at its work. Use a new directory only for independent
+    fixtures after confirming there are no outstanding workers or effects.
+    """
     path = state_dir.absolute() / _LEDGER_NAME
     try:
         path.parent.mkdir(mode=0o700)
