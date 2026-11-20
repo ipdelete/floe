@@ -221,9 +221,10 @@ class PRTrace:
 
 def pr_trace(inputs: RoleInput, pr: PullRequest) -> PRTrace:
     """Use observed closing links and verified squash evidence, not branch URLs."""
+    revision = inputs.approval.sha if inputs.approval is not None else None
     if (inputs.role not in (Role.BUILDER, Role.DESIGNER) or not isinstance(pr, PullRequest)
             or not matches_child_pr(pr, inputs.feature, inputs.issue.number) or pr.head_branch != inputs.branch
-            or (inputs.role is Role.BUILDER and pr.approved_revision != inputs.approval.sha)
+            or pr.approved_revision != revision
             or not isinstance(pr.state, PullRequestState)):
         raise HandoffError("PR does not match the expected child and revision")
     url = _repo_url(inputs.feature)

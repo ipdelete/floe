@@ -185,18 +185,26 @@ def test_attempt_worktree_and_pr_closure_contract(tmp_path):
     retry = inputs(snap, Role.BUILDER, 5, approval=approval, attempt=2)
     other = inputs(snap, Role.BUILDER, 6, approval=approval)
     designer = inputs(snap, Role.DESIGNER, 1)
+    revision = feature(designs={1: design(), 2: DesignEvidence(OPEN, False, 1, (), None)})
+    redesign = inputs(revision, Role.DESIGNER, 2, approval=approval)
     assert builder.branch == f"feature/{FEATURE.number}-{SLUG}-5"
     assert retry.branch == builder.branch + "-attempt-2"
     assert retry.session_name == builder.session_name + " — attempt 2"
     assert len({w.worktree(tmp_path) for w in (builder, retry, other, designer)}) == 4
     assert all(w.worktree(tmp_path).is_relative_to(tmp_path) for w in (builder, retry, other, designer))
-    for w in (builder, designer):
+    for repo in ("../floe", "example/..", "/example/floe", "example/floe/../other", "example/floe\nlog"):
+        bad = IssueRef(repo, FEATURE.number)
+        with pytest.raises(h.HandoffError):
+            h.role_input(bad, SLUG, snap.tree, Work(Role.BUILDER, 5, approval))
+    for w in (builder, designer, redesign):
         assert h.pr_body(w).splitlines()[:2] == [f"Closes #{w.issue.number}", f"Refs #{FEATURE.number}"]
         good = pr(200, w.issue.number, approved_revision=w.approval.sha if w.approval else None,
                   head_branch=w.branch)
         assert h.pr_trace(w, good).pr_url.endswith("/pull/200")
         with pytest.raises(h.HandoffError):
             h.pr_trace(w, replace(good, head_branch=retry.branch))
+        with pytest.raises(h.HandoffError):
+            h.pr_trace(w, replace(good, approved_revision=SECOND))
         for closing in ((FEATURE,), (w.issue, FEATURE), (issue(99),), (IssueRef("elsewhere/floe", w.issue.number),)):
             with pytest.raises(h.HandoffError):
                 h.pr_trace(w, replace(good, closes=closing))

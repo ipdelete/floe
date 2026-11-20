@@ -7,7 +7,7 @@ A work offer is not an admission; merge candidates only pass this scope check.
 
 import re
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 from types import MappingProxyType
 
@@ -42,7 +42,7 @@ class PullRequest:
     squash_sha: str | None = None
     squash_verified: bool | None = None  # verified for this PR, including the required trailers
     merged_by: str | None = None
-    approved_revision: str | None = None  # independently bound to this story PR, not the current issue label
+    approved_revision: str | None = None  # independently bound story approval or design predecessor
     head_branch: str | None = None  # recorded same-repo head name, even after ref deletion; None for unverified/fork
 
 
@@ -134,7 +134,8 @@ class FeatureEvidence:
     closeout_active: bool | None  # active closeout work or an existing closeout candidate
     backlogs: tuple[Backlog, ...] | None = ()  # complete published history; None is unknown
     planner_active: bool | None = False
-    revision_requests: tuple[RevisionRequest, ...] | None = None  # complete trusted history
+    # Complete trusted history: () for confirmed absence, None for unknown.
+    revision_requests: tuple[RevisionRequest, ...] | None = field(kw_only=True)
 
     def __post_init__(self):
         object.__setattr__(self, "children", MappingProxyType(dict(self.children)))
@@ -342,7 +343,8 @@ def _story_pr(
             return Reason.STORY_DISCREPANCY
         return None
     [pr] = story.candidates
-    if not _issue_number(story.expected_pr) or pr.number != story.expected_pr or not matches_child_pr(pr, feature, issue):
+    if (not _issue_number(story.expected_pr) or pr.number != story.expected_pr
+            or not matches_child_pr(pr, feature, issue)):
         return Reason.STORY_DISCREPANCY
     if pr.approved_revision != approval.sha:
         return Reason.STALE_STORY

@@ -113,14 +113,16 @@ Use a feature-scoped marker for each `StorySpec.key`, stable across revisions.
 and a fresh verified approval. An unlinked or conflicting match blocks instead
 of requesting another issue; recover prior writes through the writer. New issue
 and rebind suggestions are not writes. A previous backlog must be reconciled,
-including explicit disposition of any unlinked story. Readiness treats unknown
-revision-request history as unknown, and a request against the current approval
-stops Builder offers and story merge eligibility. A subsequent verified design
+including explicit disposition of any unlinked story. Fixture adapters must
+supply `FeatureEvidence.revision_requests` explicitly: a complete trusted
+history, `()` for verified absence, or `None` for an unknown read. A request
+against the current approval stops Builder offers and story merge eligibility.
+Link a new design child to route the request to Designer. A subsequent verified
 approval still needs a reconciled backlog before either can resume.
 
 Use `pr_body()` for the child-only `Closes` and nonclosing feature `Refs` header.
-Verify actual closing links and the recorded same-repo head name with
-`pr_trace()`, not a branch URL. Use `valid_work_commit()` on work commits and
+Verify actual closing links, the recorded same-repo head name and the pinned
+story approval or design predecessor with `pr_trace()`, not a branch URL. Use `valid_work_commit()` on work commits and
 again on the squash message. Keep the issue → PR → squash link and the spike
 commit pin independently of topic branch links. Fixtures exercise these routes
 with local Git refs; hosted closure and deployment are not tested here.
