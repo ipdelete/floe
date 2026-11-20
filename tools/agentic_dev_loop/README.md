@@ -83,9 +83,54 @@ run/session ownership before stopping it. Unexpected exits or interruptions
 before a verified stop receipt remain ambiguous; a missing unit is not a
 terminal outcome. The postflight still checks for residues under the same lease.
 
-No production timer, live GitHub transport or Pi worker is configured. A
-read-only snapshot and distinct cgroups establish path and lifetime separation
-for this fixture, not filesystem or credential isolation from same-user code.
+No production timer or GitHub mutation transport is configured. A read-only
+snapshot and distinct cgroups establish path and lifetime separation for this
+fixture, not filesystem or credential isolation from same-user code.
+
+## Supervised persistent Pi smoke
+
+This is opt-in and budgets one Pi prompt. Use the same reviewed lease entry
+point below, with the exact selection `-k installed_pi_smoke`. The ordinary
+live suite runs credential-free service isolation controls, not the model call.
+
+Before the run, an operator must provision the following under their private
+`~/.local/state/floe-pi-smoke-inputs/` (directory `0700`, regular files `0600`,
+no links). The fixture does not create tokens, fall back to the operator's
+ambient logins, or copy a whole home or Pi directory:
+
+| File | Required contents |
+| --- | --- |
+| `config.json` | `tick_login`, `worker_login` (exact expected GitHub logins, worker must be the configured maintainer), `node`, `release` (absolute paths to the reviewed Node executable and pinned Pi release directory) |
+| `tick-token` | Already-provisioned fine-grained GitHub credential scoped to `ipdelete/floe`, with read-only permissions including Issues read |
+| `worker-token` | Separate credential for the maintainer's `gh` login |
+| `copilot.json` | Pi-native auth JSON containing only the `github-copilot` entry |
+| `models-store.json` | Reviewed Pi catalog cache containing the pinned Copilot model, without secrets or extra provider configuration |
+
+Use a trusted Pi release supporting the print and session flags (validated CLI
+contract: Pi 1.5.2). The host needs `/usr/bin/python3.14`, `gh`, `git`,
+Bubblewrap with unprivileged user namespaces, cgroup v2, and effective systemd
+socket and syscall restrictions. The two transient services start without a
+terminal or shell activation. Each mounts only its explicit role inputs;
+neither gets the host home, runtime directory, inherited environment or access
+to the Unix sockets or kernel keyring. The live probes check these conditions
+before touching auth. The tick makes fixed GETs, including a bad-auth control;
+checking these reads does not establish the permissions of a misprovisioned
+GitHub token. The operator must verify its read-only scope at provisioning.
+
+The trusted supervisor runs the read-only tick probe first, then uses the
+fixture reconciliation and launcher to admit one worker. This deliberately
+keeps the manager bus out of both credential-bearing processes. This is not a
+new installed timer or a production GitHub tick adapter. The ordinary lifetime
+fixture above separately checks Floe's installed timer and tick/worker overlap.
+The worker checks the exact login, then runs Pi in a disposable, read-only Git
+worktree with one fixed prompt, no tools or extensions, and retries disabled.
+The probe checks the response and native session header, name, and filename;
+only after collection and rechecking the file can the launcher archive success.
+The worktree is removed. The launcher ledger and any native session remain
+private; publish only a safe result, never their paths or contents. Missing
+provisioning, ineffective isolation or unconfirmed status blocks the smoke;
+passing it does not authorize unattended work or establish isolation for
+arbitrary role code, other local services, or a hostile same-UID operator.
 
 ## Live E2E lease
 

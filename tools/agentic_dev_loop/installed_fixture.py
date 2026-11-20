@@ -237,18 +237,21 @@ class Fixture:
         authority = StartAuthority()
         return Launcher(self.state / "ledger", authority, manager if manager is not None else self.manager()), authority
 
+    def admit(self, launcher: Launcher, authority: StartAuthority) -> Reservation:
+        tick = Tick(_Issues(), _Admission(launcher, authority), Cooldowns(),
+                    limits=TickLimits(tick_seconds=20, call_seconds=20))
+        [result] = tick.reconcile([FeatureScope(_FEATURE, REQUEST.key.repo_id, REQUEST.key.feature_id,
+                                                _POLICY, "fixture-read", "fixture-write")])
+        if result.outcome is not Outcome.MIRRORED or result.reservation is None:
+            raise RuntimeError(f"fixture admission not confirmed: {result.outcome}")
+        return result.reservation
+
     def task(self, *, timeout_case: bool):
         def reconcile():
             invocation = os.environ["INVOCATION_ID"]
             if not re.fullmatch(r"[0-9a-f]{32}", invocation):
                 raise ValueError("the fixture must run as an installed tick")
-            launcher, authority = self.launcher()
-            tick = Tick(_Issues(), _Admission(launcher, authority), Cooldowns(),
-                        limits=TickLimits(tick_seconds=20, call_seconds=20))
-            [result] = tick.reconcile([FeatureScope(_FEATURE, REQUEST.key.repo_id, REQUEST.key.feature_id,
-                                                    _POLICY, "fixture-read", "fixture-write")])
-            if result.outcome is not Outcome.MIRRORED or result.reservation is None:
-                raise RuntimeError(f"fixture admission not confirmed: {result.outcome}")
+            reservation = self.admit(*self.launcher())
             release = self.state / "release"
             child = None
             try:
@@ -259,7 +262,7 @@ class Fixture:
                     "invocation": invocation, "pid": os.getpid(),
                     "child_pid": child.pid if child else None,
                     "cgroup": Path("/proc/self/cgroup").read_text(),
-                    "run_id": result.reservation.run_id, "session_id": result.reservation.session_id,
+                    "run_id": reservation.run_id, "session_id": reservation.session_id,
                 })
                 deadline = time.monotonic() + 30
                 while not release.exists():
