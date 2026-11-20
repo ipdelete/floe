@@ -31,8 +31,8 @@ def test_failed_run_is_reported_as_failed(tmp_path):
         'dag = {"boom": set()}\n'
     )
 
-    floe("install", str(workflow))
     try:
+        floe("install", str(workflow))  # inside the try: a partial install is still removed
         floe("start", str(workflow), check=False)  # exits nonzero because the run fails
         runs = json.loads(floe("runs", str(workflow), "--json", "-n", "1").stdout)
     finally:
