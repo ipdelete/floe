@@ -20,123 +20,10 @@ feature.
 - Keep rendering, file operations, service-manager calls, and journal access
   separate. `tests/test_boundaries.py` enforces architectural constraints.
 
-## Non-negotiable safety rules
+## Releases
 
-- Do not run real-systemd E2E tests or modify the user's systemd session without
-  explicit approval. Never operate on unrelated units or clean up arbitrary
-  files. Generated E2E workflows use the `floe-e2e-` prefix.
-- Workflow Python is trusted executable code, not sandboxed data. Execute it
-  only where documented; metadata-only inspection must not load definitions.
-- Preserve sibling-import isolation during both loading and task execution.
-  Restore `sys.path` and `sys.modules` even after exceptions. Loading/execution
-  is serial and must not race with other threads importing sibling modules.
-- Treat ownership of files and ownership of loaded units as separate facts.
-  An owned file does not authorize stopping a foreign loaded fragment.
-- Unknown state is not absent, safe, or successfully cleaned. Report failed
-  queries instead of silently turning them into successful cleanup.
-- Validate both units and calendar expressions before installation writes.
-  Recheck ownership immediately before destructive file operations. Never
-  overwrite masks, symlinks, or directories, including with `--adopt`.
-- Keep planning separate from applying. Dry runs may inspect and validate, but
-  must not write files or contact the service manager. Use systemd's calendar
-  parser rather than implementing a competing parser.
-- Make cleanup recoverable: attempt independent steps, aggregate failures, and
-  retain enough ownership information to retry unfinished work. Do not remove
-  the last cleanup marker before timer-state cleanup succeeds.
-- Preserve per-file atomic replacement without claiming the unit pair is a
-  transaction. Repeated operations must handle partial prior success.
-- Keep JSON/event stdout separate from diagnostics. Definition/import output
-  belongs on stderr at the CLI boundary, not in machine-readable output.
-- Every accepted workflow name must remain addressable. Preserve explicit name
-  targeting for file-like names and operation after definition deletion.
-
-## Implementation conventions
-
-- Prefer explicit state and straightforward control flow over fewer lines.
-  Use loops for coordinating side effects and comprehensions for transformations.
-- Normalize and snapshot inputs before validation; consume iterators only once.
-  Avoid reconstructing validated objects unnecessarily. This does not replace
-  safety rechecks at filesystem or service-manager boundaries.
-- Validate runtime inputs explicitly; annotations and `Literal` are not runtime
-  checks. Collect independent definition problems rather than failing at the
-  first malformed prerequisite. Do not use assertions for user-input validation.
-- Prefer dataclasses to dictionaries with an implicit record schema. Add small
-  helpers with clear responsibilities, not generic frameworks for hypothetical
-  future features. Remove unreachable behavior and its tests together.
-- Reconstruct history by invocation identity, not record adjacency. Delayed or
-  interleaved records must not truncate another invocation's history.
-- Validate event schemas, event-specific fields, statuses, and timezone-aware
-  timestamps before using them as history evidence. Malformed event-shaped JSON
-  remains ordinary output. Missing evidence is not proof of success or failure.
-- Use subprocess argument lists and systemd-specific escaping, not shell quoting
-  as a substitute. Bound operations appropriately; a synchronous workflow start
-  may legitimately wait for its configured workflow timeout. Streaming readers
-  must terminate and reap producers when callers stop early.
-- Keep refactors focused and behavior-preserving unless a contract change is
-  intentional and documented. Measure realistic workloads before optimizing.
-
-## Engineering method
-
-Use **Spike**, **Design**, and **Implement** as complementary methods, not
-mandatory sequential stages. Choose the cheapest useful next action based on
-what is known, remaining uncertainty, risk, and the cost of being wrong:
-
-- **Spike:** answer a bounded question through focused experiments. Confirm the
-  setup and versions, use controls where useful, and distinguish observations
-  from inferences. Prototype code is disposable by default; retain reproducible,
-  decision-relevant findings, including failed approaches and limitations.
-- **Design:** turn evidence into explicit alternatives, trade-offs, constraints,
-  invariants, and a validation plan. Ask for human judgment on consequential
-  architectural choices; an agent recommendation is not an approved decision.
-- **Implement:** build the smallest coherent change against the engineering
-  intent. Validate it and revisit spike/design when new evidence changes an
-  assumption. Routine, understood changes can proceed directly to implementation.
-
-Skills are in `.agents/skills/`; optional starters are in `.agents/templates/`.
-Keep durable artifacts proportional to the effort under
-`.agents/engineering/<effort>/`, with an entry point and links when several
-records are needed. Disposable code belongs in that effort's `experiments/`
-directory on spike branches only; `docs/` describes the product. Keep current
-conclusions clear and significant history explicit.
-For consequential choices, maintain an effort-local `decisions.md`: record the
-choice, alternatives, rationale, evidence, uncertainty, status, and who approved
-it when the choice is made. Reconcile decisions and stale references at session
-end; label reconstructed rationale or unknowns honestly. Small routine changes
-need no decision log or separate implementation report.
-
-See [Engineering knowledge](.agents/engineering/README.md) for spike branches and
-evidence handoff. Merge-bound work follows the PR workflow below; disposable
-experiments use validation appropriate to the question. Safety rules apply to both.
-
-## Development and pull-request workflow
-
-1. Start from an up-to-date `master` (`git pull --ff-only`), preserving any
-   existing local work. Create a focused `fix/...`, `feature/...`, `docs/...`, or
-   `spike/...` branch before making changes; never push changes directly to `master`.
-2. Choose the appropriate path:
-   - **Disposable spike:** follow the
-     [spike branch workflow](.agents/engineering/README.md#spike-branches-and-handoff)
-     and stop this checklist here; a PR is optional and not intended for merge.
-   - **Merge-bound work:** keep the PR coherent; consequential designs need human
-     approval before implementation. Add appropriate tests and documentation, run
-     the relevant [local validation](#testing-and-validation), then continue below.
-3. Commit and push the branch, then open a PR against `master`. Describe the
-   change, relevant evidence and decisions, validation results, skipped checks,
-   and unresolved questions or risks. PR-Agent and CI do not substitute for
-   human approval of consequential architectural choices.
-4. Run PR-Agent on the PR. Verify each finding against the implementation and
-   supported contracts; fix valid issues and explain why others do not apply.
-   If review cannot run, report the blocker rather than claiming it completed.
-5. Push fixes and rerun affected tests and review as needed. Before merging,
-   inspect the final diff and confirm CI has passed on the latest PR commit;
-   pending or failed checks are not success. Do not bypass branch protection.
-6. When authorized to merge, squash-merge with a meaningful commit message.
-   Delete the merged PR's remote branch, update local `master`, and remove the
-   local branch only after confirming it contains no additional work. Squash
-   merging may require `git branch -D`; do not use it as blanket cleanup.
-
-Real-systemd E2E validation remains separately opt-in and requires explicit
-approval; a PR or passing CI does not authorize modifying the user's session.
+When asked to prepare or publish a release, follow [Releases](docs/releases.md)
+for versioning, tags, validation, and maintainer approval.
 
 ## Testing and validation
 
@@ -159,14 +46,11 @@ git diff --check
 - For packaging or service-command changes, build a wheel and validate a clean
   installation outside the checkout, including the console entry point and
   exact generated interpreter command. Run offline unit verification where applicable.
-- With explicit approval, run the real-session suite separately:
+- Run the real-session suite separately:
   `uv run pytest -q -m systemd_e2e --systemd-e2e`.
 - Report what ran, what was skipped, and remaining validation gaps. Passing mocks
   or offline unit verification does not establish real-systemd lifecycle behavior.
 
 ## Documentation expectations
 
-Keep the README, docs/, examples, help text, and public contracts aligned. Document
-prerequisites, execution side effects, JSON/exit-code behavior, recovery steps,
-and compatibility limits when they change. Do not broaden guarantees beyond
-what implementation and validation support.
+Keep the README, docs/, examples, help text, and public contracts aligned.
