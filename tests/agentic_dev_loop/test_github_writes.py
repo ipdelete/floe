@@ -209,6 +209,18 @@ def test_acknowledgement_is_not_a_verified_result_and_a_new_id_cannot_bypass_pen
     assert [call for call in transport.calls if call[0] == 'send'] == [('send', first, 1)]
 
 
+@pytest.mark.parametrize('change,before,after', [CASES[1][:3], CASES[4][:3]])
+def test_verified_create_is_not_repeated_under_another_id_after_stale_absence(state, change, before, after):
+    transport = Transport(before, after)
+    op = Operation('original', REPO, change)
+    result = run(state, transport, op)
+    assert result.outcome is Outcome.VERIFIED
+    assert run(state, transport, replace(op, id='also-verifies')) == result
+    transport.evidence = Evidence(REPO, before)
+    assert run(state, transport, replace(op, id='stale-read')).outcome is Outcome.CONFLICT
+    assert [call for call in transport.calls if call[0] == 'send'] == [('send', op, 1)]
+
+
 def test_push_needs_nonapplication_proof_for_its_current_generation(state):
     change, before, after = CASES[0][:3]
     transport = Transport(before, after)

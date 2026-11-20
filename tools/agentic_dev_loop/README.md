@@ -51,9 +51,13 @@ lock inode, including after restarts. Supply a stable operation ID from trusted
 inputs, not a new one on each call. The journal binds the ID to the complete
 request, commits a send claim before transport I/O, and keeps verified
 receipts. A repeated verified call returns the stored receipt, not a guarantee
-that the remote object is still unchanged. The logical writer uses a nonblocking
-lock (`BUSY` means no I/O); it doesn't serialize maintainers or other clients.
-Both transport calls must honor the supplied absolute monotonic deadline.
+that the remote object is still unchanged. One issue marker or PR branch pair
+identifies one creation target; a stale empty search cannot erase a verified
+creation. Provision under an operator-controlled parent and keep the directory
+private; the lock does not isolate same-UID code. `BUSY` means no I/O, not
+queued work. Both transport calls must honor the supplied absolute monotonic
+deadline. An unexpected adapter exception propagates, leaving any committed
+send claim for the next reconciliation.
 
 A successful transport reply still requires a read of the exact result. If a
 send might have landed, continue reconciling with the same ID. An unchanged

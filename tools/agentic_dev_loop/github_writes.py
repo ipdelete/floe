@@ -421,6 +421,13 @@ class Writer:
                 return Result(Outcome.CONFLICT)
         if gate is _Gate.CONFLICT:
             return Result(Outcome.CONFLICT)
+        if isinstance(operation.change, (CreateIssue, CreatePR)):
+            # A marker or branch pair is a single creation target in this loop.
+            # A stale empty search must not undo a previously verified receipt.
+            created = conn.execute("SELECT receipt FROM writes WHERE target = ? AND receipt IS NOT NULL LIMIT 1",
+                                   (target,)).fetchone()
+            if created is not None and created[0] != gate:
+                return Result(Outcome.CONFLICT)
         if gate is _Gate.ABSENT:
             return evidence
         conn.execute("UPDATE writes SET receipt = ? WHERE id = ?", (gate, operation.id))
