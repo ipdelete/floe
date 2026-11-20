@@ -432,6 +432,37 @@ def test_cancel_rechecks_only_owned_run_and_retains_slot_until_clean(state_dir, 
     assert restarted.start_or_get(tick, OTHER).key == OTHER.key
 
 
+def test_cancel_before_dispatch_proves_no_worker_or_effects(state_dir, monkeypatch):
+    tick = StartAuthority()
+    manager = FakeManager()
+    launcher = Launcher(state_dir, tick, manager)
+    restarted = Launcher(state_dir, tick, manager)
+    claim = launcher._claim_dispatch
+
+    def no_manager_access(*args):
+        pytest.fail("a bare reservation has no worker or external effects to reconcile")
+
+    def cancel_before_claim(reservation):
+        assert restarted.status(tick, reservation.key).state is lifecycle.AttemptState.RESERVED
+        result = restarted.cancel(tick, reservation.run_id)
+        assert result.state is lifecycle.AttemptState.CANCELLED
+        assert not result.slot_reserved
+        return claim(reservation)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(manager, "inspect", no_manager_access)
+        patch.setattr(manager, "effects_reconciled", no_manager_access)
+        patch.setattr(launcher, "_claim_dispatch", cancel_before_claim)
+        original = launcher.start_or_get(tick, REQUEST)
+        assert restarted.start_or_get(tick, REQUEST) == original
+        assert manager.starts == manager.stops == []
+
+    with pytest.raises(lifecycle.RetryNotAllowed):
+        restarted.start_or_get(tick, RETRY)
+    retry = restarted.start_or_get(tick, RETRY, allow_retry=True)
+    assert manager.starts == [retry]
+
+
 def test_restart_after_stop_before_receipt_does_not_repeat_stop(state_dir, monkeypatch):
     tick = StartAuthority()
     manager = FakeManager()

@@ -62,6 +62,9 @@ class WorkerUnavailable(Exception):
 class WorkerManager(Protocol):
     """Trusted, bounded operations; must not call back into the launcher.
 
+    Calls hold the ledger writer lock to serialize dispatch and cancellation.
+    Other callers can hit the SQLite lock deadline if an adapter is slow.
+
     Evidence binds the exact run, unit and session. CLEAN confirms that no
     owned process or pending start remains; MISSING does not. SUCCEEDED and
     FAILED additionally require verified completion, not just worker exit.
@@ -89,7 +92,7 @@ class WorkerManager(Protocol):
 class AttemptState(StrEnum):
     RESERVED = "reserved"
     UNKNOWN = "unknown"
-    RUNNING = "running"
+    RUNNING = "running"  # Derived from inspection; never stored in the ledger.
     CANCELLING = "cancelling"
     SUCCEEDED = "succeeded"
     FAILED = "failed"
