@@ -1,0 +1,221 @@
+"""Trusted design-PR refusal over fixture evidence, with no live squash adapter."""
+
+import re
+from collections.abc import Callable, Hashable
+from dataclasses import dataclass
+from enum import StrEnum
+from typing import Protocol
+
+from .feature_tree import EvidenceReadError, IssueRef, valid_issue_ref
+
+
+@dataclass(frozen=True)
+class Candidate:
+    pr: IssueRef
+    title: str
+    author: str
+    base: str
+    base_sha: str
+    head_sha: str
+
+
+class ChangeKind(StrEnum):
+    CHANGE = "change"  # any non-rename, non-deletion change
+    DELETE = "delete"
+    RENAME = "rename"
+
+
+@dataclass(frozen=True)
+class ChangedPath:
+    path: str  # original path for a deletion, destination for a rename
+    kind: ChangeKind = ChangeKind.CHANGE
+    previous_path: str | None = None  # required for a rename
+
+
+@dataclass(frozen=True)
+class ClosingIssue:
+    issue: IssueRef
+    title: str
+
+
+@dataclass(frozen=True)
+class DesignProtection:
+    adr_path: str
+    decision_log_path: str
+    design_issues: frozenset[IssueRef]  # known identities regardless of current title
+
+
+@dataclass(frozen=True)
+class Page[T]:
+    candidate: Candidate
+    items: tuple[T, ...]
+    total: int  # authoritative count of all records, not the number the endpoint can return
+    next_cursor: str | None
+
+
+class MergeTransport(Protocol):
+    """Fresh normalized facts; raise EvidenceReadError if completeness cannot be verified.
+
+    Pages must be bound to the supplied candidate, not stamped with an assumed
+    identity. `None` cursor after a page means verified exhaustion, not a cap or
+    a missing cursor. Closing links are actual GitHub edges, not PR body text.
+    """
+
+    def candidate(self, pr: IssueRef) -> Candidate: ...
+
+    def changed_paths(self, candidate: Candidate, cursor: str | None) -> Page[ChangedPath]: ...
+
+    def closing_issues(self, candidate: Candidate, cursor: str | None) -> Page[ClosingIssue]: ...
+
+    def squash(self, candidate: Candidate) -> None:
+        """Request a squash for this PR with the expected head SHA."""
+        ...
+
+
+class MergeOutcome(StrEnum):
+    DESIGN_PR = "design-pr"
+    UNKNOWN_EVIDENCE = "unknown-evidence"
+    STORY_GATES_BLOCKED = "story-gates-blocked"
+    CANDIDATE_CHANGED = "candidate-changed"
+    SQUASH_REQUESTED = "squash-requested"
+
+
+@dataclass(frozen=True)
+class _ClassifiedStory:
+    candidate: Candidate
+    paths: frozenset[ChangedPath]
+    links: frozenset[ClosingIssue]
+
+
+def _issue_key(issue: IssueRef) -> tuple[str, int]:
+    return issue.repo.casefold(), issue.number
+
+
+def _nonempty_text(value: object) -> bool:
+    return isinstance(value, str) and bool(value.strip())
+
+
+def _sha(value: object) -> bool:
+    return isinstance(value, str) and re.fullmatch(r"[0-9a-f]{40}", value) is not None
+
+
+def _repo_path(value: object) -> bool:
+    return (isinstance(value, str) and "\0" not in value
+            and all(part not in {"", ".", ".."} for part in value.split("/")))
+
+
+def _path_keys(item: ChangedPath) -> tuple[str, ...]:
+    if (not isinstance(item, ChangedPath) or not _repo_path(item.path)
+            or not isinstance(item.kind, ChangeKind)):
+        raise EvidenceReadError("malformed changed path")
+    if item.kind is ChangeKind.RENAME:
+        if not _repo_path(item.previous_path) or item.previous_path == item.path:
+            raise EvidenceReadError("missing or invalid rename source")
+        return item.path, item.previous_path
+    if item.previous_path is not None:
+        raise EvidenceReadError("unexpected rename source")
+    return (item.path,)
+
+
+def _link_keys(item: ClosingIssue) -> tuple[tuple[str, int]]:
+    if (not isinstance(item, ClosingIssue) or not valid_issue_ref(item.issue)
+            or not _nonempty_text(item.title)):
+        raise EvidenceReadError("malformed closing link")
+    return (_issue_key(item.issue),)
+
+
+def _read_pages[T](
+    candidate: Candidate,
+    read: Callable[[Candidate, str | None], Page[T]],
+    keys: Callable[[T], tuple[Hashable, ...]],
+) -> frozenset[T]:
+    cursor = None
+    seen_cursors: set[str] = set()
+    seen_keys: set[Hashable] = set()
+    items: list[T] = []
+    total = None
+    while True:
+        page = read(candidate, cursor)
+        if (not isinstance(page, Page) or page.candidate != candidate
+                or not isinstance(page.items, tuple)
+                or type(page.total) is not int or page.total < 0
+                or (total is not None and total != page.total)):
+            raise EvidenceReadError("missing or inconsistent evidence page")
+        total = page.total
+        for item in page.items:
+            identities = keys(item)
+            if not seen_keys.isdisjoint(identities):
+                raise EvidenceReadError("duplicate or conflicting evidence")
+            seen_keys.update(identities)
+            items.append(item)
+
+        cursor = page.next_cursor
+        if cursor is None:
+            if len(items) != total:
+                raise EvidenceReadError("evidence count does not match exhausted connection")
+            return frozenset(items)
+        if (not _nonempty_text(cursor) or cursor in seen_cursors or not page.items
+                or len(items) >= total):
+            raise EvidenceReadError("evidence continuation does not make progress")
+        seen_cursors.add(cursor)
+
+
+def _classify(
+    pr: IssueRef, policy: DesignProtection, transport: MergeTransport,
+) -> _ClassifiedStory | MergeOutcome:
+    try:
+        candidate = transport.candidate(pr)
+        if (not isinstance(candidate, Candidate) or candidate.pr != pr
+                or not valid_issue_ref(candidate.pr) or not _nonempty_text(candidate.title)):
+            return MergeOutcome.UNKNOWN_EVIDENCE
+        if candidate.title.startswith("Design:"):
+            return MergeOutcome.DESIGN_PR
+        if (not _nonempty_text(candidate.author) or not _nonempty_text(candidate.base)
+                or not _sha(candidate.base_sha) or not _sha(candidate.head_sha)):
+            return MergeOutcome.UNKNOWN_EVIDENCE
+
+        paths = _read_pages(candidate, transport.changed_paths, _path_keys)
+        protected = {policy.adr_path, policy.decision_log_path}
+        if any(path.path in protected or path.previous_path in protected for path in paths):
+            return MergeOutcome.DESIGN_PR
+
+        links = _read_pages(candidate, transport.closing_issues, _link_keys)
+        known_designs = {_issue_key(issue) for issue in policy.design_issues}
+        if any(link.title.startswith("Design:") or _issue_key(link.issue) in known_designs for link in links):
+            return MergeOutcome.DESIGN_PR
+    except (EvidenceReadError, OSError):
+        return MergeOutcome.UNKNOWN_EVIDENCE
+    return _ClassifiedStory(candidate, paths, links)
+
+
+def attempt_story_squash(
+    pr: IssueRef,
+    policy: DesignProtection,
+    transport: MergeTransport,
+    story_gates: Callable[[Candidate], bool],
+) -> MergeOutcome:
+    """Classify, call the separate story gates, then reclassify before requesting squash.
+
+    Classification does not authorize a merge, and a squash request is not a
+    verified result. There is no live transport, retry, or post-merge check here.
+    """
+    if not valid_issue_ref(pr):
+        raise ValueError("a repository-qualified PR number is required")
+    if (not isinstance(policy, DesignProtection) or not _repo_path(policy.adr_path)
+            or not _repo_path(policy.decision_log_path) or policy.adr_path == policy.decision_log_path
+            or not isinstance(policy.design_issues, frozenset)
+            or not all(valid_issue_ref(issue) for issue in policy.design_issues)):
+        raise ValueError("canonical protection paths and known design identities are required")
+
+    first = _classify(pr, policy, transport)
+    if isinstance(first, MergeOutcome):
+        return first
+    if story_gates(first.candidate) is not True:
+        return MergeOutcome.STORY_GATES_BLOCKED
+    fresh = _classify(pr, policy, transport)
+    if isinstance(fresh, MergeOutcome):
+        return fresh
+    if first != fresh:
+        return MergeOutcome.CANDIDATE_CHANGED
+    transport.squash(fresh.candidate)
+    return MergeOutcome.SQUASH_REQUESTED

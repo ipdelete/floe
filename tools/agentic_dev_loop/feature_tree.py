@@ -81,7 +81,7 @@ class UnknownTree:
     reason: UnknownReason
 
 
-def _valid_ref(issue: object) -> bool:
+def valid_issue_ref(issue: object) -> bool:
     if not isinstance(issue, IssueRef) or not isinstance(issue.repo, str):
         return False
     owner, separator, repo = issue.repo.partition("/")
@@ -90,8 +90,8 @@ def _valid_ref(issue: object) -> bool:
 
 
 def _valid_child(child: object) -> bool:
-    return (isinstance(child, ChildIssue) and _valid_ref(child.issue)
-            and (child.parent is None or _valid_ref(child.parent))
+    return (isinstance(child, ChildIssue) and valid_issue_ref(child.issue)
+            and (child.parent is None or valid_issue_ref(child.parent))
             and isinstance(child.title, str))
 
 
@@ -150,6 +150,6 @@ def read_feature_trees(
     classify phases, not membership; issue bodies never supply edges.
     """
     requested = tuple(features)
-    if not all(_valid_ref(feature) for feature in requested):
+    if not all(valid_issue_ref(feature) for feature in requested):
         raise ValueError("features must be repository-qualified issue numbers")
     return {feature: _read_feature_tree(transport, feature) for feature in dict.fromkeys(requested)}
