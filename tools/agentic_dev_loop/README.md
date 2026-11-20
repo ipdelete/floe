@@ -35,6 +35,49 @@ before insert; any existing note is left alone. There is deliberately no GitHub
 mutation adapter, claim of atomic GitHub comment updates, or deployed worker
 lifecycle guarantee.
 
+## Reconcile a GitHub write
+
+`github_writes.Writer` is the fixture entry point for pushes, issue creation
+and closure, sub-issue links, PR creation, and reservation/terminal writeback.
+It does not replace the tick's fixture port, perform role authorization, or
+merge anything. Create an issue with a stable marker, recover its issue ID,
+and link it to the parent as a separate operation. A link does not reparent a
+child. Run notes append to the issue's attempt history; no comment is edited
+and no GitHub comment compare-and-swap is assumed.
+
+Provision once with `initialize_writer()` in a protected local directory. All
+cooperating callers for the repository must share that directory and the same
+lock inode, including after restarts. Supply a stable operation ID from trusted
+inputs, not a new one on each call. The journal binds the ID to the complete
+request, commits a send claim before transport I/O, and keeps verified
+receipts. A repeated verified call returns the stored receipt, not a guarantee
+that the remote object is still unchanged. One issue marker or PR branch pair
+identifies one creation target; a stale empty search cannot erase a verified
+creation. Provision under an operator-controlled parent and keep the directory
+private; the lock does not isolate same-UID code. `BUSY` means no I/O, not
+queued work. Both transport calls must honor the supplied absolute monotonic
+deadline. An unexpected adapter exception propagates, leaving any committed
+send claim for the next reconciliation.
+
+A successful transport reply still requires a read of the exact result. If a
+send might have landed, continue reconciling with the same ID. An unchanged
+ref, empty search, timeout or lost receipt is not enough to replay. Only a
+push can replay, and only with positive proof that the exact send generation
+cannot still apply, unchanged original ref conditions, and an exact old-ref
+lease at send. No live adapter supplies this proof. An unresolved send blocks
+other IDs targeting the same object; changing or deleting the journal to get
+past the block is unsafe. Terminal notes are fingerprinted durably so stale or
+conflicting evidence cannot authorize a regression. If inspection stays
+inconclusive, hold the affected work for operator investigation; there is no
+automatic rollback or forced retry.
+
+```sh
+uv run pytest -q tests/agentic_dev_loop/test_github_writes.py
+```
+
+These tests use normalized fixture evidence only. They do not prove live
+search completeness, endpoint race behavior or GitHub mutation semantics.
+
 ## Design PR refusal fixture
 
 ```sh
