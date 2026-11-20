@@ -66,11 +66,17 @@ Grouped by spike; the pinned results retain the full rationale and limitations. 
 | D-21 | Session retention is undecided, and there is no backup policy. Sessions stay in Pi's local storage; losing them is an accepted risk. Waives the ADR's pre-pilot retention requirement. | Design | Maintainer | Accepted | [#36](https://github.com/ipdelete/floe/pull/36) / orchestrating session `01a1f52b-4f03-7480-9a47-e3525d5ed1bb` | Maintainer's go-ahead when approving #36 |
 | D-22 | Design approved. The maintainer approved PR #36 and instructed the agent to merge it under the maintainer's login, consistent with D-11. | Design | Maintainer | Accepted | [#36](https://github.com/ipdelete/floe/pull/36) / orchestrating session `01a1f52b-4f03-7480-9a47-e3525d5ed1bb` | Maintainer's instruction in the orchestrating session |
 
+## Implementation decisions
+
+| ID | Choice and consequence | Phase | Decided by | Status | Issue / session | Evidence |
+| --- | --- | --- | --- | --- | --- | --- |
+| I-37 | Publish an inventory only after the ordered sub-issue connection is exhausted. Reject repeated child identities even when their fields agree rather than deduplicating: a duplicate can indicate a shifted page boundary and a missed child. This pauses the affected feature without treating a partial tree as complete. | Implement | Agent | Accepted | [#37](https://github.com/ipdelete/floe/issues/37) / `01a1f63a-bb7d-75e0-9a43-857a52572bd2` | [Pagination fixtures](../../../tests/agentic_dev_loop/test_feature_tree.py); live pagination consistency remains unverified. |
+
 ## Session reconciliation
 
 - **Session:** A. Reviewed D-01–D-10 against #29; transcribed the spike recommendations as S-31–S-35 and recorded A-01–A-11 during design. No rationale attributed to the maintainer beyond what #29 records.
 - **Open approvals:** none for the design beyond merging #36; D-11–D-19 resolved the open decisions. Design approval does not grant GitHub App/repo or user-manager setup permission and does not establish that the validation gates passed.
-- **Implementation:** No implementation decisions yet. Preserve previous rows when accepting or superseding a decision and link the new record to the old one.
+- **Implementation:** I-37 records the fixture reader's handling of incomplete pagination. Preserve previous rows when accepting or superseding a decision and link the new record to the old one.
 
 [feature]: https://github.com/ipdelete/floe/issues/29
 [requirements]: https://github.com/ipdelete/floe/issues/29#decision-log
