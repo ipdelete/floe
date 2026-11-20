@@ -166,9 +166,8 @@ staged tree. Run the staging tests with
 
 ### Local pre-push policy
 
-Call `closeout_policy.release_closeout(candidate, staging_root, feature, slug,
-scanner, publish)` from the trusted publisher, not the Archivist or candidate
-checkout. Configure the absolute private staging root (with trusted parent
+The trusted publisher calls `closeout_policy.release_closeout()`, not the
+Archivist or candidate checkout. Configure the absolute private staging root (with trusted parent
 directories), expected issue and slug, and absolute path to the standalone
 Gitleaks **v8.30.0** Linux arm64 or x64 release binary. Install it separately
 from the [upstream release](https://github.com/gitleaks/gitleaks/releases/tag/v8.30.0);
@@ -197,8 +196,7 @@ callback must write exactly that delta without consulting staging again.
 Callback exceptions propagate because once the writer has been invoked a write
 may already have happened. Do not retry on that basis without reconciliation.
 The filesystem checks are not a lock against another process; never run
-untrusted code in the publisher's security context. This slice tests a fake
-writer, not public push, caller authorization, hosted CI or remote recovery.
+untrusted code in the publisher's security context.
 
 Run the policy tests offline with
 `uv run pytest -q tests/agentic_dev_loop/test_closeout_policy.py`. Set
@@ -206,14 +204,80 @@ Run the policy tests offline with
 scanner's clean, Bearer and built-in rule controls on synthetic inputs. The
 normal suite otherwise tests the subprocess boundary with fakes.
 
+### Sealed publication and closeout squash
+
+`closeout_release.Publisher` is a trusted supervisor entry point, not a worker
+command or a general GitHub writer. Give it the private `FrozenCloseout` but
+no native session store. Hold its permit, journal, scanner configuration and
+transport outside the worker. The permit is an in-process capability, not a
+new human approval or a security boundary against arbitrary code in that
+process. Do not expose the generic writer, transport, or a mechanism for
+supplying callbacks to the Archivist.
+
+The publisher checks the scanned index against fresh approval and completed
+backlog evidence. Its adapter prepares a commit with the pinned `master` base
+as sole parent, fixed trusted metadata, and just the two sealed regular-file
+additions. It may not read a checkout or reopen staging. The only allowed
+push is creation of `feature/<feature-id>-closeout`; the PR targets `master`
+and its generated body closes just the feature. Both writes use durable claims
+under the shared writer lock. After an interrupted reply, reopen the same
+journal and supply the same handoff and target. The publisher must observe the
+exact ref or expected PR before advancing. An empty or conflicting read does
+not authorize another send, even after a timeout. If the result stays
+unresolved, surface the status to the maintainer and preserve the journal. This
+fixture does not overwrite existing closeout files, rebase or replace a
+published candidate, or repair unexpected remote state.
+
+Run the independent check **from the separately protected tooling root**, not
+from the PR, its worktree, or a candidate-selected policy or command:
+
+```sh
+python3.14 -E -s -B -m tools.agentic_dev_loop.hosted_closeout \
+  --repo /path/to/protected/git-objects --repository OWNER/REPO \
+  --feature FEATURE_NUMBER --slug FEATURE_SLUG --base MASTER_SHA --head PR_HEAD_SHA \
+  --scanner /path/to/pinned/gitleaks
+```
+
+Provision `/usr/bin/git` and a protected Git SHA-1 object store with valid,
+complete objects for these trusted event identities, fixed local config,
+normal Git intake validation and resource limits. The checker inspects only Git objects, not a
+checkout. It checks the complete diff from the sole parent, requires exactly
+the two non-executable regular-file additions, and runs its own pinned policy
+on those bytes. It exits 1 with a safe status on refusal; success emits only
+the base SHA, head SHA and SHA-256 digest of the paths and blob bytes. Local
+stdout is **not** authenticated hosted evidence. A hosted adapter has to bind
+that result to the exact PR and candidate and authenticate the configured
+protected workflow identity/revision independently of its displayed name.
+
+`Publisher.merge()` requires the verified publication receipt, current
+same-repository open PR and feature, exact hosted success, current `master`,
+and the same completed backlog with no redesign hold. The conditional squash
+transport must enforce those facts at the write boundary, not just do a client
+reread before a head-only merge. The broker journals the claim and verifies the
+actual squash SHA, sole parent, delta, `Refs: #<feature>` trailer and feature
+closure attributed to that exact merge of the PR. It never directly closes the issue. It can
+reconcile a delayed closure or lost merge reply by PR and issue number without
+the topic ref. Unexpected merge or closure and unresolved sends remain
+blocked; do not clear a claim on that basis.
+
+```sh
+FLOE_TEST_GITLEAKS=/absolute/path/to/gitleaks uv run pytest -q \
+  tests/agentic_dev_loop/{test_closeout_release,test_hosted_closeout}.py
+```
+
+This is fixture wiring only: no deployed GitHub write adapter or hosted trigger
+is installed. The pilot still needs to demonstrate trusted hosted triggering
+and identity, the real write conditions, and GitHub auto-close from the
+expected squash. Do not enable public closeout from these local results alone.
+
 ## Checked story squash fixture
 
 ```sh
 uv run pytest -q tests/agentic_dev_loop/{test_merge,test_story_merge}.py
 ```
 
-`story_merge.MergeBroker` is the fixture's only squash entry point, separate
-from the tick. Configure the canonical ADR path and known design issue IDs
+`story_merge.MergeBroker` is the fixture's story squash entry point, separate
+from the tick and the closeout publisher. Configure the canonical ADR path and known design issue IDs
 (including legacy #30 for feature #29) in trusted policy. A `Design:` title,
 actual closing link to a design issue, or change to the canonical ADR (including
 deletions and both sides of renames) blocks squash, regardless of author. Diff

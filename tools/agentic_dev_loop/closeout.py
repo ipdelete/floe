@@ -11,7 +11,7 @@ from pathlib import Path
 
 from .feature_tree import IssueRef, Phase
 from .handoffs import HandoffError, _check_id, _feature_tag
-from .readiness import FeatureEvidence, Policy, Reason, Role, decide_feature, valid_sha
+from .readiness import Decision, FeatureEvidence, Policy, Reason, Role, decide_feature, valid_sha
 
 _HEADER_LIMIT = 16 * 1024
 _SUMMARY_LIMIT = 64 * 1024
@@ -176,6 +176,24 @@ def _write_candidate(root: Path, tag: str, index: bytes, summary: bytes) -> Froz
     return FrozenCloseout(directory, index, summary)
 
 
+def public_scope(feature: IssueRef, decision: Decision) -> dict:
+    """The version-1 index projection of a completed backlog and its approval."""
+    approval = decision.approval
+    if not decision.closeout_ready or approval is None:
+        raise CloseoutBlocked("approved backlog is not ready")
+    url = f"https://github.com/{feature.repo}"
+    return {
+        "design": {"issue": f"{url}/issues/{approval.issue}", "pr": f"{url}/pull/{approval.pr}",
+                   "squash": f"{url}/commit/{approval.sha}"},
+        "stories": [
+            {"issue": f"{url}/issues/{story.issue}", "status": "merged", "pr": f"{url}/pull/{story.pr}",
+             "squash": f"{url}/commit/{story.squash_sha}"}
+            for story in decision.completed_stories
+        ] + [{"issue": f"{url}/issues/{number}", "status": "superseded"}
+             for number in sorted(b.issue for b in decision.blockers if b.reason is Reason.SUPERSEDED)],
+    }
+
+
 def stage_closeout(root: Path, policy: Policy, evidence: FeatureEvidence, draft: CloseoutDraft,
                    sessions: tuple[Session, ...]) -> FrozenCloseout:
     """Run after Archivist exit with fresh normalized evidence and a complete roster.
@@ -204,13 +222,7 @@ def stage_closeout(root: Path, policy: Policy, evidence: FeatureEvidence, draft:
     index = {
         "version": 1,
         "feature": {"label": tag, "issue": f"{url}/issues/{draft.feature.number}"},
-        "design": {"issue": f"{url}/issues/{approval.issue}", "pr": f"{url}/pull/{approval.pr}",
-                   "squash": f"{url}/commit/{approval.sha}"},
-        "stories": [
-            {"issue": f"{url}/issues/{story.issue}", "status": "merged", "pr": f"{url}/pull/{story.pr}",
-             "squash": f"{url}/commit/{story.squash_sha}"}
-            for story in decision.completed_stories
-        ] + [{"issue": f"{url}/issues/{number}", "status": "superseded"} for number in sorted(superseded)],
+        **public_scope(draft.feature, decision),
         "sessions": included,
         "omissions": omitted,
     }
