@@ -127,6 +127,45 @@ again on the squash message. Keep the issue → PR → squash link and the spike
 commit pin independently of topic branch links. Fixtures exercise these routes
 with local Git refs; hosted closure and deployment are not tested here.
 
+## Private closeout staging
+
+The fixture supervisor calls the Python staging entry point
+`closeout.stage_closeout(root, policy, evidence, draft, sessions)`. It accepts
+normalized fixture evidence, not GitHub or Pi commands. Keep `root` an existing
+owned `0700` directory outside the checkout, under operator-controlled parents.
+
+1. Admit the Archivist only once readiness offers it. It writes the summary for
+   closeout separately from its native session. Keep the `CloseoutDraft`
+   (feature, configured slug, approved squash, Archivist session ID and summary)
+   private. The summary must be nonempty UTF-8 prose of at most 64 KiB; the
+   stager cannot establish whether prose contains sensitive or quoted material.
+2. After the Archivist exits, give the stager a fresh, complete readiness
+   snapshot and the complete session roster. Each `Session` must be bound by
+   the supervisor to its actual role, issue, attempt, canonical ID, absolute
+   local native path and verified process completion. A file or reservation ID
+   is not completion evidence. The stager checks the approved backlog again
+   independently of whether a second Archivist could be admitted.
+3. The stager checks the bounded native Pi header for identity, not body records
+   or dialogue. An absent native file can yield the fixed
+   `native-session-missing` omission only if explicitly permitted for that
+   finished session. Unreadable or invalid native headers block; the draft's
+   Archivist must be present, verified, finished and never omitted.
+4. On success, hand off the returned `FrozenCloseout` without another model
+   session. It carries the exact immutable `index.json` and `summary.md` bytes
+   and the location of their private read-only copies. The version-1 index
+   contains generated feature/session labels, issue/PR/squash links, verified
+   session IDs and permitted omissions. It contains no session paths or native
+   body records. Each successful call creates a new directory; it cannot edit a
+   prior candidate. Treat only a successful handoff as a candidate, not stray
+   directories left by an interrupted local write.
+
+This is private staging only. Filesystem modes aren't isolation from the
+owner, and snapshots aren't locks against remote changes. No credentials,
+retention policy, scanner, publication, push or issue write is involved. Do
+not upload the staged bytes; release policy and candidate verification belong to
+later gates. Run the synthetic acceptance tests with
+`uv run pytest -q tests/agentic_dev_loop/test_closeout.py`.
+
 ## Checked story squash fixture
 
 ```sh
