@@ -9,6 +9,7 @@ import socket
 import stat
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from uuid import UUID
 
@@ -130,6 +131,28 @@ def verify_session(directory, session_id):
         return False
 
 
+def pi_exit_report(returncode, stderr):
+    # Persist only fixed labels, not bytes supplied by Pi, Node, or a provider.
+    raw = stderr.lower()
+    known = (
+        ("permission-denied", (b"eacces", b"permission denied")),
+        ("operation-not-permitted", (b"eperm", b"operation not permitted")),
+        ("read-only-filesystem", (b"erofs", b"read-only file system")),
+        ("missing-file", (b"enoent", b"no such file")),
+        ("bad-file-descriptor", (b"ebadf", b"bad file descriptor")),
+        ("unsupported-address-family", (b"eafnosupport", b"address family not supported")),
+        ("assertion", (b"assertion", b"check failed")),
+        ("node-runtime", (b"node.js v", b"fatal error", b"libuv", b"native stack trace")),
+        ("stdio", (b"stdout", b"stderr", b"epipe", b"write eio")),
+        ("disposal", (b"dispose", b"shutdown")),
+        ("size-limit", (b"efbig", b"file too large")),
+        ("socket", (b"socket", b"connect")),
+        ("worker-thread", (b"worker_thread", b"uv_thread", b"pthread")),
+    )
+    categories = [name for name, patterns in known if any(pattern in raw for pattern in patterns)]
+    return {"returncode": returncode, "stderr": categories or (["unclassified"] if stderr else [])}
+
+
 def run_pi(session_id):
     if str(UUID(session_id)) != session_id or any(SESSIONS.iterdir()):
         raise Blocked("Pi session reservation not fresh")
@@ -143,16 +166,23 @@ def run_pi(session_id):
     }))
     if MODELS.exists():
         (AGENT / "models-store.json").write_bytes(MODELS.read_bytes())
-    # Native session evidence is checked below and again after collection.
-    # Never capture incidental print-mode output or send it to the journal.
-    result = subprocess.run(
-        ["/node", "/pi/node_modules/.bin/pi", "--print", "--model", MODEL, "--thinking", "off",
-         "--session-id", session_id, "--name", SESSION_NAME, "--session-dir", str(SESSIONS),
-         "--no-tools", "--no-extensions", "--no-skills", "--no-prompt-templates", "--no-themes",
-         "--no-context-files", PROMPT],
-        env={**ENV, "PI_CODING_AGENT_DIR": str(AGENT), "PI_OFFLINE": "1"}, stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=45,
-    )
+    # The service limits file size. Raw stderr stays in an unnamed file in
+    # private tmpfs; only a bounded, allowlisted diagnosis survives collection.
+    with tempfile.TemporaryFile(dir=AGENT) as diagnostics:
+        result = subprocess.run(
+            ["/node", "/pi/node_modules/.bin/pi", "--print", "--model", MODEL, "--thinking", "off",
+             "--session-id", session_id, "--name", SESSION_NAME, "--session-dir", str(SESSIONS),
+             "--no-tools", "--no-extensions", "--no-skills", "--no-prompt-templates", "--no-themes",
+             "--no-context-files", PROMPT],
+            # Pi's bundled entry point enables Node's compile cache, which
+            # flushes at exit and can exceed the sandbox's per-file limit.
+            env={**ENV, "PI_CODING_AGENT_DIR": str(AGENT), "PI_OFFLINE": "1", "NODE_DISABLE_COMPILE_CACHE": "1"},
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL, stderr=diagnostics, timeout=45,
+        )
+        diagnostics.seek(0)
+        report = pi_exit_report(result.returncode, diagnostics.read(32 * 1024))
+    write_private_json(OUTPUT, "pi-exit", report)
     if result.returncode != 0:
         raise Blocked("Pi process did not exit successfully")
     if not verify_session(SESSIONS, session_id):
@@ -179,12 +209,16 @@ FAILURES = frozenset({
 })
 
 
-def write_outcome(output, run_id, session_id, outcome):
-    temporary = output / "outcome.tmp"
+def write_private_json(output, stem, payload):
+    temporary = output / f"{stem}.tmp"
     fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     with os.fdopen(fd, "w") as stream:
-        json.dump({"run_id": run_id, "session_id": session_id, "outcome": outcome}, stream)
-    temporary.replace(output / "outcome.json")
+        json.dump(payload, stream)
+    temporary.replace(output / f"{stem}.json")
+
+
+def write_outcome(output, run_id, session_id, outcome):
+    write_private_json(output, "outcome", {"run_id": run_id, "session_id": session_id, "outcome": outcome})
 
 
 def main(role, identity, run_id, session_id):

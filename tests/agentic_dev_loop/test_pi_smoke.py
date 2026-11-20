@@ -72,14 +72,19 @@ def test_worker_runs_fixed_persistent_command_once(monkeypatch, tmp_path):
     def fake_run(argv, **kwargs):
         commands.append(argv)
         assert kwargs["stdin"] == subprocess.DEVNULL
-        assert kwargs["stderr"] == subprocess.DEVNULL
+        kwargs["stderr"].write(b"synthetic warning with credential gibberish\n")
         assert not {"GH_TOKEN", "SSH_AUTH_SOCK"} & kwargs["env"].keys()
+        assert kwargs["env"]["NODE_DISABLE_COMPILE_CACHE"] == "1"
         native(sessions, session_id)
         assert kwargs["stdout"] == subprocess.DEVNULL
         return subprocess.CompletedProcess(argv, 0)
 
     monkeypatch.setattr(probe.subprocess, "run", fake_run)
+    monkeypatch.setattr(probe, "OUTPUT", tmp_path)
     probe.run_pi(session_id)
+    report = tmp_path / "pi-exit.json"
+    assert report.stat().st_mode & 0o777 == 0o600
+    assert json.loads(report.read_text()) == {"returncode": 0, "stderr": ["unclassified"]}
     [argv] = commands
     assert argv[:3] == ["/node", "/pi/node_modules/.bin/pi", "--print"]
     for flag, value in [("--model", "github-copilot/gpt-6.2-sol"), ("--session-id", session_id),
@@ -89,6 +94,11 @@ def test_worker_runs_fixed_persistent_command_once(monkeypatch, tmp_path):
     assert argv[-1] == probe.PROMPT
     settings = json.loads((probe.AGENT / "settings.json").read_text())
     assert settings["retry"]["enabled"] is False
+
+
+def test_pi_diagnostic_classifies_stderr_without_saving_raw_text():
+    report = probe.pi_exit_report(-6, b"EACCES: permission denied /private/path: secret-token\nAssertion failed\n")
+    assert report == {"returncode": -6, "stderr": ["permission-denied", "assertion"]}
 
 
 def native(directory, session_id, *, embedded=None, reply=probe.REPLY, model="gpt-6.2-sol", stop="stop"):

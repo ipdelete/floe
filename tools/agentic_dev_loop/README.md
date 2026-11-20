@@ -129,9 +129,12 @@ new installed timer or a production GitHub tick adapter. The ordinary lifetime
 fixture above separately checks Floe's installed timer and tick/worker overlap.
 The worker checks the exact login, then runs Pi in a disposable, read-only Git
 worktree with one fixed prompt, no tools or extensions, and retries disabled.
-The probe discards Pi's stdout and stderr. It checks the exit code and the
-native session header, name, filename, and pinned model reply. Only after
-collection and rechecking the file can the launcher archive success.
+The probe discards Pi's stdout. Raw stderr stays in sandbox tmpfs; only an
+exit code and fixed diagnostic categories are saved privately. It checks the
+native session header, name, filename, and pinned model reply. Node's compile
+cache is disabled so its shutdown writes do not hit the sandbox's file size
+limit. Only after collection and rechecking the session can the launcher
+archive success.
 The worktree is removed. The launcher ledger and any native session remain
 private; publish only a safe result, never their paths or contents. Missing
 provisioning, ineffective isolation or unconfirmed status blocks the smoke;
