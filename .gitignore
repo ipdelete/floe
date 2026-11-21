@@ -6,6 +6,9 @@ dist/
 wheels/
 *.egg-info
 
+# Playwright failure artifacts
+/test-results/
+
 # Virtual environments
 .venv
 
