@@ -44,8 +44,22 @@ it with `create_feature_issue` when asked. Its instructions forbid changing
 issues through `bash`, but the guard does not enforce that: see below.
 
 Callers share the conversation; one request runs at a time and others are
-refused as busy. Tasks, results and accepted work survive restarts. See the
-[`pi-durable-a2a` semantics](https://github.com/ianphil/pi-durable-a2a#semantics).
+refused as busy. Tasks, results and accepted work live in the same Durable store
+and survive restarts according to Durable's retry policy. The host installs
+`A2AExtension` before opening/resuming the harness and explicitly enables the
+LiteLLM task-forwarding route alongside native `/a2a`.
+
+All foreground work in this conversation must come through A2A: no independent
+host submissions or automatic follow-up runs. `/intake` keeps its separate
+conversations. Durable 1.6.0 only supports conversation-wide abort, so mixing
+unrelated input into the backlog conversation would make cancellation unsafe.
+See the [`pi-durable-a2a` semantics](https://github.com/ianphil/pi-durable-a2a#semantics).
+
+When upgrading from the separate-database bridge, settle work and stop the old
+listener first. Preserve `durable.sqlite`, the listener token and registration.
+The former `a2a.sqlite` is not imported: old A2A task IDs start fresh, while the
+Durable conversation's history remains. Archive the old A2A store if needed;
+there is no automatic deletion or migration.
 
 The listener's bearer token is created once in `.intake/backlog/listener-token`.
 To make the agent discoverable, publish it in the fleet gateway once, after the

@@ -8,7 +8,8 @@ import { createRegistry, defineExtension, Harness } from '@earendil-works/pi-dur
 import { NodeExecutionEnv } from '@earendil-works/pi-durable/env/node';
 import { openNodeSqliteStorage } from '@earendil-works/pi-durable/storage/sqlite/node';
 import { createBashTool } from '@earendil-works/pi-durable/tools';
-import { createA2AServer, openA2A } from 'pi-durable-a2a';
+import { A2AExtension, createA2AServer, openA2A } from 'pi-durable-a2a';
+import { liteLLMTaskHandler } from 'pi-durable-a2a/litellm';
 import { BashGuard } from './bash-guard.js';
 import { createFeatureIssueTool, repo, searchFeaturesTool } from './github.js';
 
@@ -57,6 +58,7 @@ export async function startBacklogAgent({ models, model, github }) {
   const host = tailscaleAddress();
   const token = listenerToken();
   const registry = createRegistry();
+  registry.install(A2AExtension);
   registry.install(BashGuard);
   registry.install(defineExtension({ name: 'backlog', tools: [
     createBashTool(),
@@ -75,12 +77,14 @@ export async function startBacklogAgent({ models, model, github }) {
     const conversation = await harness.root(context, { agent: { model, instructions, maxTurns: 12 } });
     // Root options apply only when the conversation is created; refresh them on every start.
     await conversation.configure({ model, instructions, maxTurns: 12 }, context);
-    harness.resume();
     const a2a = await openA2A({
-      conversation, database: join(directory, 'a2a.sqlite'),
+      harness, conversation,
       card: { ...identity, url: `http://${host}:${port}/a2a` },
     });
-    const server = createA2AServer(a2a, { token });
+    harness.resume();
+    const server = createA2AServer(a2a, {
+      token, extraRoutes: { '/': liteLLMTaskHandler(a2a.handler) },
+    });
     await new Promise((resolve, reject) => server.once('error', reject).listen(port, host, resolve));
     console.log(`Floe backlog agent listening at http://${host}:${port}/a2a`);
     return {
