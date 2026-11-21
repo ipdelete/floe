@@ -1,6 +1,7 @@
 """Fast-forward the local pr-agent checkout, verify it, then publish to the fork."""
 
 import os
+import signal
 import subprocess
 import sys
 from pathlib import Path
@@ -36,8 +37,19 @@ def command(tool, *args, timeout=120, network=False, doctor=False):
     argv = [str(tool), *args]
     log("$ " + " ".join(argv))
     try:
-        result = subprocess.run(argv, cwd=REPO, env=env, capture_output=True,
-                                text=True, timeout=timeout)
+        with subprocess.Popen(argv, cwd=REPO, env=env, stdout=subprocess.PIPE,
+                              stderr=subprocess.PIPE, text=True, start_new_session=True) as process:
+            try:
+                stdout, stderr = process.communicate(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                # Kill helpers too, before a retry can start another command.
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass  # The process group has already exited.
+                process.communicate()
+                raise
+            result = subprocess.CompletedProcess(argv, process.returncode, stdout, stderr)
     except FileNotFoundError:
         raise RuntimeError(f"Missing executable or checkout: {tool}, {REPO}") from None
     except subprocess.TimeoutExpired:

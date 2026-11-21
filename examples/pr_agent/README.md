@@ -64,8 +64,10 @@ Fetch/push retry recognized connection/DNS/HTTP 502–504 failures or timeouts;
 authentication and rejected pushes fail immediately. Doctor retries any nonzero
 exit or timeout, so a failing run can make a second paid model call. Successful
 tasks are not rerun during a retry. Subprocess timeouts are two minutes for Git,
-ten minutes for sync, and three minutes per doctor attempt. The installed
-service's default 30-minute overall timeout includes retries.
+ten minutes for sync, and three minutes per doctor attempt. Each command runs
+in its own process group; a timeout kills the group (including helpers) and
+reaps the command before a retry begins. The installed service's default
+30-minute overall timeout includes retries.
 
 ## Failure and recovery
 

@@ -1,7 +1,12 @@
 """Workflow contracts use real Git histories and the real Floe runner."""
 
 import importlib.util
-import subprocess
+import os
+import select
+import signal
+import sys
+import time
+from pathlib import Path
 
 import pytest
 
@@ -88,21 +93,51 @@ def module(checkout):
     ("fatal: Authentication failed", False),
     ("! [rejected] main -> main (fetch first)", False),
 ])
-def test_network_retry_classification(module, monkeypatch, detail, retry):
-    def failed(*args, **kwargs):
-        return subprocess.CompletedProcess(args[0], 128, "", detail)
-    monkeypatch.setattr(module.subprocess, "run", failed)
+def test_network_retry_classification(module, detail, retry):
+    code = f"import sys; print({detail!r}, file=sys.stderr); sys.exit(128)"
     with pytest.raises(RuntimeError) as error:
-        module.command(module.GIT, "fetch", "upstream", network=True)
+        module.command(Path(sys.executable), "-c", code, network=True)
     assert isinstance(error.value, module.TransientFailure) is retry
 
 
-def test_network_timeout_can_retry(module, monkeypatch):
-    def timeout(argv, **kwargs):
-        raise subprocess.TimeoutExpired(argv, kwargs["timeout"])
-    monkeypatch.setattr(module.subprocess, "run", timeout)
-    with pytest.raises(module.TransientFailure, match="timed out"):
-        module.command(module.GIT, "push", "origin", "main:main", network=True)
+@pytest.mark.parametrize("kind,retry", [("network", True), ("doctor", True), ("sync", False)])
+def test_timeout_kills_helpers_before_returning(module, tmp_path, kind, retry):
+    # Both processes hold the captured pipes open. The descendant must be dead
+    # when command() raises, before Floe can start a retry.
+    pid_file = tmp_path / "helper.pid"
+    code = (
+        "import subprocess, sys, time; from pathlib import Path; "
+        "helper = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)']); "
+        f"Path({str(pid_file)!r}).write_text(str(helper.pid)); "
+        "time.sleep(60)"
+    )
+    pidfd = None
+    helper_pid = None
+    started = time.monotonic()
+    try:
+        with pytest.raises(RuntimeError, match="timed out") as error:
+            module.command(Path(sys.executable), "-c", code, timeout=2,
+                           network=kind == "network", doctor=kind == "doctor")
+        assert isinstance(error.value, module.TransientFailure) is retry
+        assert time.monotonic() - started < 5
+        helper_pid = int(pid_file.read_text())
+        try:
+            pidfd = os.pidfd_open(helper_pid)
+        except ProcessLookupError:
+            pass  # Already reaped by its new parent.
+        else:
+            # A pidfd becomes readable on exit, even before a zombie is reaped.
+            assert select.select([pidfd], [], [], 2)[0] == [pidfd]
+    finally:
+        if helper_pid is None and pid_file.exists():
+            helper_pid = int(pid_file.read_text())
+        if helper_pid is not None:
+            try:
+                os.kill(helper_pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        if pidfd is not None:
+            os.close(pidfd)
 
 
 def test_checkout_change_after_doctor_prevents_push(checkout, module):
