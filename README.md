@@ -21,4 +21,6 @@ Tenacity is Floe's only third-party runtime dependency. Floe uses it for retries
 - [Use the Python library](docs/library.md)
 - [Install a release wheel or publish a release](docs/releases.md)
 
+Example maintenance workflow: [update and verify pr-agent daily](examples/pr_agent/README.md).
+
 Contributing? See [testing guide](tests/AGENTS.md) and [CI](.github/workflows/ci.yml).
